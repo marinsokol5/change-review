@@ -37,6 +37,7 @@ const TARGETS: Record<HookTarget, { file: string; matcher: string; label: string
 
 interface HookInput {
   session_id?: string;
+  transcript_path?: string;
   cwd?: string;
   tool_name?: string;
   tool_input?: {
@@ -217,6 +218,38 @@ function formatVerdict(r: ReviewResult): Decision {
   return { action: "deny", reason: lines.join("\n") };
 }
 
+// --- Prefix filtering: read the last user message from the transcript --------
+
+function lastUserPrompt(transcriptPath: string): string | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf8");
+  } catch {
+    return null;
+  }
+  const lines = raw.split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj = JSON.parse(lines[i]) as Record<string, unknown>;
+      // Claude Code wraps each turn: {type:"user", message:{role:"user", content:[...]}}
+      const msg = obj.type === "user" && obj.message ? (obj.message as Record<string, unknown>) : obj;
+      if (msg.role !== "user") continue;
+      const content = msg.content;
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) {
+        const text = (content as Array<{ type?: string; text?: string }>)
+          .filter((c) => c.type === "text")
+          .map((c) => c.text ?? "")
+          .join("");
+        if (text) return text;
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return null;
+}
+
 // --- The hook entry point (agent-change-reviewer hook-run) -------------------------------
 
 export async function runHook(): Promise<never> {
@@ -229,7 +262,12 @@ export async function runHook(): Promise<never> {
     emit({ action: "pass" });
   }
 
-  if (!config.readConfig().hookEnabled) emit({ action: "pass" });
+  const cfg = config.readConfig();
+  if (!cfg.hookEnabled) emit({ action: "pass" });
+  if (cfg.reviewPrefix) {
+    const prompt = input.transcript_path ? lastUserPrompt(input.transcript_path) : null;
+    if (!prompt || !prompt.startsWith(cfg.reviewPrefix)) emit({ action: "pass" });
+  }
   if (input.session_id && hasAlwaysFlag(input.session_id)) {
     emit({ action: "allow", reason: "agent-change-reviewer: all edits allowed for this session by the human reviewer" });
   }

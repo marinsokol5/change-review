@@ -322,17 +322,24 @@ function cmdConfig(args: string[]): void {
   const [key, value] = args;
   const cfg = config.readConfig();
   if (!key) {
-    console.log(JSON.stringify({ "wait-mode": cfg.waitMode }, null, 2));
+    console.log(JSON.stringify({ "wait-mode": cfg.waitMode, "review-prefix": cfg.reviewPrefix ?? null }, null, 2));
     return;
   }
-  if (key !== "wait-mode") fail(`unknown config key "${key}" (known keys: wait-mode)`);
-  if (value === undefined) {
-    console.log(cfg.waitMode);
+  if (key === "wait-mode") {
+    if (value === undefined) { console.log(cfg.waitMode); return; }
+    if (value !== "poll" && value !== "stop") fail(`wait-mode must be "poll" or "stop", got "${value}"`);
+    config.writeConfig({ ...cfg, waitMode: value });
+    console.log(`wait-mode = ${value}`);
     return;
   }
-  if (value !== "poll" && value !== "stop") fail(`wait-mode must be "poll" or "stop", got "${value}"`);
-  config.writeConfig({ ...cfg, waitMode: value });
-  console.log(`wait-mode = ${value}`);
+  if (key === "review-prefix") {
+    if (value === undefined) { console.log(cfg.reviewPrefix ?? "(not set)"); return; }
+    const prefix = value === "" ? undefined : value;
+    config.writeConfig({ ...cfg, reviewPrefix: prefix });
+    console.log(prefix ? `review-prefix = ${prefix}` : "review-prefix cleared");
+    return;
+  }
+  fail(`unknown config key "${key}" (known keys: wait-mode, review-prefix)`);
 }
 
 function hookTarget(raw: string | undefined): hook.HookTarget {
@@ -374,6 +381,7 @@ function cmdHook(args: string[]): void {
       console.log(`claude hook installed: ${hook.isHookInstalled("claude") ? "yes" : "no (agent-change-reviewer hook install claude)"}`);
       console.log(`codex hook installed:  ${hook.isHookInstalled("codex") ? "yes" : "no (agent-change-reviewer hook install codex)"}`);
       console.log(`review mode: ${cfg.hookEnabled ? "on" : "off"}`);
+      if (cfg.reviewPrefix) console.log(`review prefix: "${cfg.reviewPrefix}"`);
       return;
     default:
       fail("usage: agent-change-reviewer hook <install|uninstall|on|off|status>");

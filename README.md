@@ -68,6 +68,7 @@ Exit codes: `0` approve · `2` request_changes · `3` reject · `4` pending (no 
 | `agent-change-reviewer hook install claude\|codex` | register the PreToolUse hook (see "Review mode" below) |
 | `agent-change-reviewer hook on\|off\|status` | arm/disarm review mode |
 | `agent-change-reviewer config wait-mode poll\|stop` | what agents do when a review outlives the CLI timeout (default `stop`) |
+| `agent-change-reviewer config review-prefix <string>` | only intercept edits when the triggering user prompt starts with this string (e.g. `cr:`); omit to intercept all edits |
 
 Useful flags on `review`: `-t/--title`, `-s/--session` (next round of an existing review), `--replies <file>` (with `--session`: per-comment replies to the previous round), `--timeout <secs>` (default 480, `0` = forever), `--port`, `--no-open`.
 

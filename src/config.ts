@@ -11,6 +11,8 @@ export interface Config {
   waitMode: WaitMode;
   /** Review mode: when true, the Claude Code PreToolUse hook intercepts Edit/Write calls. */
   hookEnabled: boolean;
+  /** When set, the hook only fires if the triggering user prompt starts with this string. */
+  reviewPrefix?: string;
 }
 
 export const DEFAULTS: Config = { waitMode: "stop", hookEnabled: false };
