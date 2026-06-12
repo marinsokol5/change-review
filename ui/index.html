@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agent-change-reviewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --fg: #e6edf3; --muted: #8d96a0; --accent: #4493f8;
+    --add-bg: rgba(46,160,67,.18); --add-num: rgba(46,160,67,.30);
+    --del-bg: rgba(248,81,73,.18); --del-num: rgba(248,81,73,.30);
+    --green: #238636; --orange: #9e6a03; --red: #da3633;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding-bottom: 90px;
+  }
+  .mono, .diff td.code, .diff td.num, .path, tr.hunk td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  #banner {
+    display: none; position: sticky; top: 0; z-index: 30;
+    background: #6e2c2c; color: #fff; padding: 8px 20px; font-size: 13px;
+  }
+
+  header { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 0 4px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  .stat-add { color: #3fb950; }
+  .stat-del { color: #f85149; }
+
+  details.history { margin-top: 10px; font-size: 13px; color: var(--fg); }
+  details.history summary { cursor: pointer; color: var(--accent); }
+  details.history .round { margin: 8px 0 8px 14px; }
+  details.history .verdict { font-weight: 600; }
+  details.history .c { color: var(--muted); margin-left: 14px; }
+
+  section.file { margin: 16px 20px; border: 1px solid var(--border); border-radius: 6px; }
+  .file-header {
+    display: flex; gap: 10px; align-items: center; padding: 8px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    border-radius: 6px 6px 0 0; position: sticky; top: 0; z-index: 10;
+  }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid; text-transform: lowercase; }
+  .badge.added { color: #3fb950; border-color: #3fb950; }
+  .badge.deleted { color: #f85149; border-color: #f85149; }
+  .badge.modified { color: #d29922; border-color: #d29922; }
+  .badge.renamed, .badge.binary { color: var(--accent); border-color: var(--accent); }
+  .file-header .path { font-size: 13px; word-break: break-all; }
+  .file-header .fstat { margin-left: auto; font-size: 12px; white-space: nowrap; }
+
+  table.diff { width: 100%; border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
+  .diff td { padding: 0 8px; vertical-align: top; }
+  .diff td.num {
+    width: 1%; min-width: 42px; text-align: right; color: var(--muted);
+    user-select: none; white-space: nowrap;
+  }
+  .diff td.marker { width: 26px; min-width: 26px; user-select: none; position: relative; padding: 0 4px; text-align: center; }
+  .diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; width: 99%; }
+  tr.line.add { background: var(--add-bg); }
+  tr.line.add td.num { background: var(--add-num); }
+  tr.line.del { background: var(--del-bg); }
+  tr.line.del td.num { background: var(--del-num); }
+  tr.line.add .intra { background: rgba(46,160,67,.45); border-radius: 2px; }
+  tr.line.del .intra { background: rgba(248,81,73,.45); border-radius: 2px; }
+  tr.line:hover td { background: rgba(68,147,248,.08); }
+  tr.hunk td { background: #121d2f; color: var(--muted); padding: 4px 12px; font-size: 12px; }
+  .nonl { color: var(--muted); font-size: 11px; font-style: italic; }
+
+  button.add-comment {
+    position: absolute; left: 1px; top: 0; display: none;
+    width: 20px; height: 20px; line-height: 18px; padding: 0;
+    border-radius: 4px; border: none; background: var(--accent); color: #fff;
+    cursor: pointer; font-size: 14px; font-weight: 700;
+  }
+  tr.line:hover button.add-comment { display: block; }
+
+  tr.thread td { background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 0; }
+  .thread-box { max-width: 820px; padding: 8px 12px 8px 64px; }
+  .comment-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; background: var(--bg); }
+  .comment-card .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .comment-card .actions { margin-top: 4px; font-size: 12px; }
+  .comment-card .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
+
+  .comment-card.question { border-color: #8957e5; }
+  .qtag { font-size: 11px; font-weight: 600; color: #a371f7; margin-bottom: 2px; }
+  .qthread { border: 1px solid #8957e5; border-radius: 6px; padding: 8px 10px; margin: 6px 0; background: var(--bg); }
+  .qthread.closed { opacity: .6; border-color: var(--border); }
+  .qthread .msg { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .qthread .msg .who { font-weight: 600; margin-right: 6px; }
+  .qthread .msg.user .who { color: #a371f7; }
+  .qthread .msg.agent .who { color: #3fb950; }
+  .qthread .qstatus { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .qthread .actions { margin-top: 4px; font-size: 12px; }
+  .qthread .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
+
+  .composer .kind { display: flex; gap: 6px; margin: 0 0 6px; }
+  .composer .kind .btn.active { border-color: var(--accent); color: var(--accent); }
+
+  details.history .reply { margin: 0 0 6px 28px; padding: 1px 8px; border-left: 2px solid var(--accent); white-space: pre-wrap; }
+  details.history .reply .who { color: var(--accent); font-weight: 600; margin-right: 6px; }
+
+  .composer { margin: 6px 0; }
+  .composer textarea {
+    width: 100%; min-height: 64px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    font: inherit; resize: vertical;
+  }
+  .composer .row { margin-top: 6px; display: flex; gap: 8px; }
+  button.btn {
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px;
+    background: #21262d; color: var(--fg); cursor: pointer; font-size: 13px;
+  }
+  button.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+
+  footer {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+    background: var(--panel); border-top: 1px solid var(--border);
+    display: flex; gap: 10px; align-items: center; padding: 12px 20px;
+  }
+  footer input {
+    flex: 1; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font: inherit;
+  }
+  footer .count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  button.verdict {
+    border: none; border-radius: 6px; padding: 8px 14px; color: #fff;
+    cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap;
+  }
+  button.verdict.approve { background: var(--green); }
+  button.verdict.request { background: var(--orange); }
+  button.verdict.reject { background: var(--red); }
+
+  #done { text-align: center; padding: 80px 20px; }
+  #done .big { font-size: 44px; }
+  #done p { color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<div id="app"></div>
+<script>
+"use strict";
+
+const state = { data: null, comments: [], questions: [], summary: "", uid: 1, done: false, sending: false };
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node[k] = v;
+    else node.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return node;
+}
+
+const $app = () => document.getElementById("app");
+const cssEscape = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"'));
+const ANCHOR_SEP = "§";
+
+function filePath(f) { return f.newPath || f.oldPath || "(unknown)"; }
+function fileLabel(f) {
+  if (f.status === "renamed" && f.oldPath && f.newPath && f.oldPath !== f.newPath) {
+    return f.oldPath + " → " + f.newPath;
+  }
+  return filePath(f);
+}
+function commentAnchor(c) { return c.file + ANCHOR_SEP + c.side + ANCHOR_SEP + c.line; }
+
+function draftKey() { return "reviewer:" + state.data.request.id + ":" + state.data.request.round; }
+function saveDraft() {
+  try {
+    localStorage.setItem(draftKey(), JSON.stringify({
+      comments: state.comments, questions: state.questions, summary: state.summary,
+    }));
+  } catch (e) { /* private mode etc. */ }
+  updateFooter();
+}
+function restoreDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(draftKey()) || "null");
+    if (d) {
+      state.comments = (d.comments || []).map((c) => ({ ...c, uid: state.uid++ }));
+      state.questions = (d.questions || []).map((q) => ({ ...q, uid: state.uid++ }));
+      state.summary = d.summary || "";
+    }
+  } catch (e) { /* ignore corrupt drafts */ }
+}
+
+function canAsk() {
+  // Hook sessions block the agent inside a PreToolUse call — it cannot run `agent-change-reviewer answer`.
+  return state.data.request.kind !== "hook";
+}
+
+/** Server threads still waiting on the agent (user spoke last, not closed). */
+function openServerQuestions() {
+  return (state.data.threads || []).filter(
+    (t) => !t.closed && t.messages.length > 0 && t.messages[t.messages.length - 1].from === "user"
+  );
+}
+
+async function init() {
+  let data;
+  try {
+    const res = await fetch("/api/session");
+    data = await res.json();
+  } catch (e) {
+    showFatal("Could not reach the review server. Restart it with: agent-change-reviewer wait <session-id>");
+    return;
+  }
+  state.data = data;
+  document.title = "agent-change-reviewer — " + data.request.title;
+  restoreDraft();
+  renderAll();
+  setInterval(() => { healthCheck(); pollThreads(); }, 3000);
+}
+
+async function pollThreads() {
+  if (state.done) return;
+  try {
+    const res = await fetch("/api/threads", { cache: "no-store" });
+    if (!res.ok) return;
+    const body = await res.json();
+    if (JSON.stringify(body.threads) !== JSON.stringify(state.data.threads || [])) {
+      state.data.threads = body.threads;
+      renderAllThreads();
+      updateFooter();
+    }
+  } catch (e) { /* offline — healthCheck shows the banner */ }
+}
+
+function stats(files) {
+  let add = 0, del = 0;
+  for (const f of files) for (const h of f.hunks) for (const l of h.lines) {
+    if (l.type === "add") add++;
+    else if (l.type === "del") del++;
+  }
+  return { add, del };
+}
+
+function renderAll() {
+  const { request, files, history } = state.data;
+  const s = stats(files);
+  const app = $app();
+  app.textContent = "";
+
+  const headerKids = [
+    el("h1", {}, request.title),
+    el("div", { class: "meta" }, [
+      "session " + request.id + " · round " + request.round + " · " +
+        files.length + (files.length === 1 ? " file " : " files "),
+      el("span", { class: "stat-add" }, "+" + s.add),
+      " ",
+      el("span", { class: "stat-del" }, "−" + s.del),
+    ]),
+  ];
+  if (history && history.length) headerKids.push(renderHistory(history));
+  app.appendChild(el("header", {}, headerKids));
+
+  if (files.length === 0) {
+    app.appendChild(el("div", { id: "done" }, [el("p", {}, "The diff is empty — nothing to review.")]));
+  }
+  for (const f of files) app.appendChild(renderFile(f));
+
+  app.appendChild(renderFooter());
+  renderAllThreads();
+  for (const c of [...state.comments]) renderCommentCard(c);
+  for (const q of [...state.questions]) renderQuestionCard(q);
+  updateFooter();
+}
+
+function renderHistory(history) {
+  const attrs = { class: "history" };
+  // Replies mean the agent just answered this round's comments — that's what the
+  // user is here to verify, so don't hide it behind a click.
+  const latest = history[history.length - 1];
+  if (latest && latest.comments.some((c) => c.reply)) attrs.open = "";
+  const d = el("details", attrs, [
+    el("summary", {}, "Previous rounds (" + history.length + ")"),
+  ]);
+  const prevThreads = (state.data.threads || []).filter((t) => t.round < state.data.request.round);
+  for (const r of history) {
+    const kids = [
+      el("div", { class: "verdict" },
+        "Round " + r.round + ": " + r.verdict.replace("_", " ") + (r.summary ? " — " + r.summary : "")),
+    ];
+    for (const c of r.comments) {
+      kids.push(el("div", { class: "c" }, c.file + ":" + c.line + " (" + c.side + ") — " + c.body));
+      if (c.reply) kids.push(el("div", { class: "reply" }, [el("span", { class: "who" }, "agent"), c.reply]));
+    }
+    for (const t of prevThreads.filter((x) => x.round === r.round)) {
+      kids.push(el("div", { class: "c" },
+        t.file + ":" + t.line + " (" + t.side + ") — question thread" + (t.closed ? " (closed)" : "")));
+      for (const m of t.messages) {
+        kids.push(el("div", { class: "reply" }, [
+          el("span", { class: "who" }, m.from === "user" ? "you" : "agent"), m.body,
+        ]));
+      }
+    }
+    d.appendChild(el("div", { class: "round" }, kids));
+  }
+  return d;
+}
+
+// --- Intra-line (token-level) diff highlighting ---------------------------
+
+function tokenize(s) {
+  return s.match(/\w+|\s+|[^\w\s]/g) || [];
+}
+
+function mergeSegments(tokens, changed) {
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const last = out[out.length - 1];
+    if (last && last.changed === changed[i]) last.text += tokens[i];
+    else out.push({ text: tokens[i], changed: changed[i] });
+  }
+  return out;
+}
+
+// LCS over tokens; everything not on the common subsequence is "changed".
+function tokenDiff(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const aChanged = new Array(m).fill(true);
+  const bChanged = new Array(n).fill(true);
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { aChanged[i] = false; bChanged[j] = false; i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  return [mergeSegments(a, aChanged), mergeSegments(b, bChanged)];
+}
+
+function intraPair(d, a) {
+  const dt = tokenize(d.text), at = tokenize(a.text);
+  if (!dt.length || !at.length || dt.length > 400 || at.length > 400) return;
+  const [dSeg, aSeg] = tokenDiff(dt, at);
+  const ratio = (segs) => {
+    let ch = 0, tot = 0;
+    for (const s of segs) { tot += s.text.length; if (s.changed) ch += s.text.length; }
+    return tot ? ch / tot : 1;
+  };
+  // If the lines barely overlap, highlighting "everything changed" is just noise.
+  if (ratio(dSeg) > 0.7 && ratio(aSeg) > 0.7) return;
+  d.intra = dSeg;
+  a.intra = aSeg;
+}
+
+// Pair runs of consecutive removed lines with the added lines that follow them
+// (the standard replacement-block shape) and diff each pair token-wise.
+function computeIntraHunk(lines) {
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].type !== "del") { i++; continue; }
+    const dels = [];
+    while (i < lines.length && lines[i].type === "del") dels.push(lines[i++]);
+    const adds = [];
+    while (i < lines.length && lines[i].type === "add") adds.push(lines[i++]);
+    const n = Math.min(dels.length, adds.length);
+    for (let k = 0; k < n; k++) intraPair(dels[k], adds[k]);
+  }
+}
+
+function renderFile(f) {
+  let add = 0, del = 0;
+  for (const h of f.hunks) for (const l of h.lines) {
+    if (l.type === "add") add++;
+    else if (l.type === "del") del++;
+  }
+  const sec = el("section", { class: "file" }, [
+    el("div", { class: "file-header" }, [
+      el("span", { class: "badge " + f.status }, f.status),
+      el("span", { class: "path" }, fileLabel(f)),
+      el("span", { class: "fstat" }, [
+        el("span", { class: "stat-add" }, "+" + add),
+        " ",
+        el("span", { class: "stat-del" }, "−" + del),
+      ]),
+    ]),
+  ]);
+  if (f.status === "binary") {
+    sec.appendChild(el("div", { style: "padding:12px;color:var(--muted)" }, "Binary file changed (contents not shown)"));
+    return sec;
+  }
+  const tbody = el("tbody", {});
+  const fp = filePath(f);
+  for (const h of f.hunks) {
+    computeIntraHunk(h.lines);
+    tbody.appendChild(el("tr", { class: "hunk" }, [
+      el("td", { colspan: "4" },
+        "@@ -" + h.oldStart + "," + h.oldCount + " +" + h.newStart + "," + h.newCount + " @@ " + (h.section || "")),
+    ]));
+    for (const ln of h.lines) {
+      const side = ln.type === "del" ? "old" : "new";
+      const lineNo = side === "old" ? ln.oldLine : ln.newLine;
+      const anchor = fp + ANCHOR_SEP + side + ANCHOR_SEP + lineNo;
+      const sign = ln.type === "add" ? "+" : ln.type === "del" ? "-" : " ";
+      const codeKids = [];
+      if (ln.intra) {
+        for (const seg of ln.intra) {
+          codeKids.push(seg.changed ? el("span", { class: "intra" }, seg.text) : seg.text);
+        }
+      } else {
+        codeKids.push(ln.text === "" ? " " : ln.text);
+      }
+      if (ln.noNewline) codeKids.push(el("span", { class: "nonl" }, "  (no newline at end of file)"));
+      tbody.appendChild(el("tr", { class: "line " + ln.type, "data-anchor": anchor }, [
+        el("td", { class: "num" }, ln.oldLine == null ? "" : String(ln.oldLine)),
+        el("td", { class: "num" }, ln.newLine == null ? "" : String(ln.newLine)),
+        el("td", { class: "marker" }, [
+          sign,
+          el("button", {
+            class: "add-comment",
+            title: "Comment on this line",
+            onclick: () => openComposer(anchor, fp, side, lineNo),
+          }, "+"),
+        ]),
+        el("td", { class: "code" }, codeKids),
+      ]));
+    }
+  }
+  const table = el("table", { class: "diff" }, [tbody]);
+  sec.appendChild(table);
+  return sec;
+}
+
+function threadBox(anchor) {
+  let row = document.querySelector('tr.thread[data-anchor="' + cssEscape(anchor) + '"]');
+  if (!row) {
+    const lineRow = document.querySelector('tr.line[data-anchor="' + cssEscape(anchor) + '"]');
+    if (!lineRow) return null;
+    const box = el("div", { class: "thread-box" });
+    row = el("tr", { class: "thread", "data-anchor": anchor }, [el("td", { colspan: "4" }, [box])]);
+    lineRow.after(row);
+  }
+  return row.querySelector(".thread-box");
+}
+
+function cleanupThreadRow(row) {
+  if (!row.querySelector(".comment-card") && !row.querySelector(".composer") && !row.querySelector(".qthread")) {
+    row.remove();
+  }
+}
+
+function cleanupThread(anchor) {
+  const row = document.querySelector('tr.thread[data-anchor="' + cssEscape(anchor) + '"]');
+  if (row) cleanupThreadRow(row);
+}
+
+// opts: { kind: "comment"|"question", thread: <id> } — thread set = follow-up on a live question thread.
+function openComposer(anchor, file, side, line, existing, opts) {
+  opts = opts || {};
+  let kind = opts.kind || "comment";
+  const box = threadBox(anchor);
+  if (!box) return;
+  const open = box.querySelector(".composer textarea");
+  if (open) { open.focus(); return; }
+
+  const isFollowUp = opts.thread != null;
+  const ta = el("textarea", {
+    placeholder: isFollowUp ? "Follow-up question for the agent…" : "Leave a comment for the agent…",
+  });
+  if (existing) ta.value = existing.body;
+
+  const composer = el("div", { class: "composer" });
+  const save = () => {
+    const body = ta.value.trim();
+    if (!body) return;
+    if (existing) {
+      existing.body = body;
+      const card = document.querySelector('.comment-card[data-uid="' + existing.uid + '"] .body');
+      if (card) card.textContent = body;
+      saveDraft();
+    } else if (kind === "question") {
+      const q = { uid: state.uid++, file, side, line, body };
+      if (isFollowUp) q.thread = opts.thread;
+      state.questions.push(q);
+      renderQuestionCard(q);
+      saveDraft();
+    } else {
+      const comment = { uid: state.uid++, file, side, line, body };
+      state.comments.push(comment);
+      renderCommentCard(comment);
+      saveDraft();
+    }
+    composer.remove();
+    cleanupThread(anchor);
+  };
+  const cancel = () => { composer.remove(); cleanupThread(anchor); };
+
+  ta.onkeydown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save();
+    if (e.key === "Escape") cancel();
+  };
+
+  const saveBtn = el("button", { class: "btn primary", onclick: save }, "");
+  const setLabel = () => {
+    saveBtn.textContent = existing
+      ? "Update"
+      : kind === "question" ? (isFollowUp ? "Add follow-up" : "Add question") : "Add comment";
+  };
+  setLabel();
+
+  // New top-level drafts choose their type; edits and follow-ups keep it.
+  if (!existing && !isFollowUp && canAsk()) {
+    const bC = el("button", { class: "btn" }, "Comment");
+    const bQ = el("button", { class: "btn" }, "Question for the agent");
+    const setKind = (k) => {
+      kind = k;
+      bC.classList.toggle("active", k === "comment");
+      bQ.classList.toggle("active", k === "question");
+      setLabel();
+    };
+    bC.onclick = () => setKind("comment");
+    bQ.onclick = () => setKind("question");
+    setKind(kind);
+    composer.appendChild(el("div", { class: "kind" }, [bC, bQ]));
+  }
+
+  composer.appendChild(ta);
+  composer.appendChild(el("div", { class: "row" }, [
+    saveBtn,
+    el("button", { class: "btn", onclick: cancel }, "Cancel"),
+  ]));
+  box.appendChild(composer);
+  ta.focus();
+}
+
+function renderCommentCard(c) {
+  const anchor = commentAnchor(c);
+  const box = threadBox(anchor);
+  if (!box) {
+    // Draft comment whose line no longer exists in this round's diff.
+    state.comments = state.comments.filter((x) => x.uid !== c.uid);
+    return;
+  }
+  const card = el("div", { class: "comment-card", "data-uid": c.uid }, [
+    el("div", { class: "body" }, c.body),
+    el("div", { class: "actions" }, [
+      el("a", { onclick: () => openComposer(anchor, c.file, c.side, c.line, c) }, "Edit"),
+      el("a", {
+        onclick: () => {
+          state.comments = state.comments.filter((x) => x.uid !== c.uid);
+          card.remove();
+          cleanupThread(anchor);
+          saveDraft();
+        },
+      }, "Delete"),
+    ]),
+  ]);
+  const composer = box.querySelector(".composer");
+  box.insertBefore(card, composer);
+}
+
+function renderQuestionCard(q) {
+  const anchor = q.file + ANCHOR_SEP + q.side + ANCHOR_SEP + q.line;
+  const box = threadBox(anchor);
+  if (!box) {
+    // Draft whose line no longer exists in this round's diff.
+    state.questions = state.questions.filter((x) => x.uid !== q.uid);
+    return;
+  }
+  const card = el("div", { class: "comment-card question", "data-uid": q.uid }, [
+    el("div", { class: "qtag" }, (q.thread != null ? "follow-up" : "question") + " — not sent yet"),
+    el("div", { class: "body" }, q.body),
+    el("div", { class: "actions" }, [
+      el("a", {
+        onclick: () => openComposer(anchor, q.file, q.side, q.line, q, { kind: "question", thread: q.thread }),
+      }, "Edit"),
+      el("a", {
+        onclick: () => {
+          state.questions = state.questions.filter((x) => x.uid !== q.uid);
+          card.remove();
+          cleanupThread(anchor);
+          saveDraft();
+        },
+      }, "Delete"),
+    ]),
+  ]);
+  const composer = box.querySelector(".composer");
+  box.insertBefore(card, composer);
+}
+
+function threadAnchor(t) { return t.file + ANCHOR_SEP + t.side + ANCHOR_SEP + t.line; }
+
+function renderThreadCard(t) {
+  const last = t.messages[t.messages.length - 1];
+  const awaiting = !t.closed && last && last.from === "user";
+  const card = el("div", { class: "qthread" + (t.closed ? " closed" : "") });
+  for (const m of t.messages) {
+    card.appendChild(el("div", { class: "msg " + m.from }, [
+      el("span", { class: "who" }, m.from === "user" ? "you" : "agent"),
+      m.body,
+    ]));
+  }
+  card.appendChild(el("div", { class: "qstatus" },
+    t.closed
+      ? "Closed without an answer — not blocking the verdict."
+      : awaiting
+        ? "Waiting for the agent's answer — the verdict is locked until every question is answered or closed."
+        : "Answered — follow up if this doesn't settle it."));
+  card.appendChild(el("div", { class: "actions" }, [
+    el("a", { onclick: () => openComposer(threadAnchor(t), t.file, t.side, t.line, null, { kind: "question", thread: t.id }) }, "Follow up"),
+    awaiting ? el("a", { onclick: () => closeThread(t) }, "Withdraw") : null,
+  ]));
+  return card;
+}
+
+/** (Re)render every live question thread of the current round into its anchor's thread box. */
+function renderAllThreads() {
+  for (const live of document.querySelectorAll(".live-threads")) live.remove();
+  const round = state.data.request.round;
+  for (const t of state.data.threads || []) {
+    if (t.round !== round) continue;
+    const box = threadBox(threadAnchor(t));
+    if (!box) continue;
+    let live = box.querySelector(".live-threads");
+    if (!live) {
+      live = el("div", { class: "live-threads" });
+      box.insertBefore(live, box.firstChild);
+    }
+    live.appendChild(renderThreadCard(t));
+  }
+  for (const row of document.querySelectorAll("tr.thread")) cleanupThreadRow(row);
+}
+
+async function closeThread(t) {
+  if (!confirm("Close this question without an answer? It will stop blocking the verdict.")) return;
+  try {
+    const res = await fetch("/api/close-thread", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ thread: t.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    state.data.threads = data.threads;
+    renderAllThreads();
+    updateFooter();
+  } catch (e) {
+    alert("Close failed: " + e.message);
+  }
+}
+
+async function sendQuestions() {
+  if (state.sending || state.questions.length === 0) return;
+  state.sending = true;
+  updateFooter();
+  const items = state.questions.map((q) => q.thread != null
+    ? { thread: q.thread, body: q.body }
+    : { file: q.file, side: q.side, line: q.line, body: q.body });
+  try {
+    const res = await fetch("/api/questions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    for (const q of state.questions) {
+      const card = document.querySelector('.comment-card[data-uid="' + q.uid + '"]');
+      if (card) card.remove();
+    }
+    state.questions = [];
+    state.data.threads = data.threads;
+    saveDraft();
+    renderAllThreads();
+  } catch (e) {
+    alert("Send failed: " + e.message);
+  } finally {
+    state.sending = false;
+    updateFooter();
+  }
+}
+
+function renderFooter() {
+  const input = el("input", {
+    placeholder: "Overall summary for the agent (optional)",
+    oninput: (e) => { state.summary = e.target.value; saveDraft(); },
+  });
+  input.value = state.summary;
+  return el("footer", {}, [
+    input,
+    el("span", { class: "count", id: "count" }, ""),
+    el("button", { class: "btn primary", id: "send-q", onclick: sendQuestions }, ""),
+    el("button", { class: "verdict approve", onclick: () => submit("approve") }, "Approve"),
+    el("button", { class: "verdict request", onclick: () => submit("request_changes") }, "Request changes"),
+    el("button", { class: "verdict reject", onclick: () => submit("reject") }, "Reject"),
+  ]);
+}
+
+function updateFooter() {
+  const c = document.getElementById("count");
+  if (!c) return;
+  const n = state.comments.length;
+  const drafts = state.questions.length;
+  const awaiting = openServerQuestions().length;
+  const parts = [n === 0 ? "no comments" : n + (n === 1 ? " comment" : " comments")];
+  if (drafts) parts.push(drafts + " unsent question" + (drafts === 1 ? "" : "s"));
+  if (awaiting) parts.push(awaiting + " awaiting agent");
+  c.textContent = parts.join(" · ");
+
+  const sendBtn = document.getElementById("send-q");
+  if (sendBtn) {
+    sendBtn.style.display = drafts ? "" : "none";
+    sendBtn.textContent = "Send " + drafts + " question" + (drafts === 1 ? "" : "s") + " to agent";
+    sendBtn.disabled = state.sending;
+  }
+
+  const locked = drafts > 0 || awaiting > 0;
+  for (const b of document.querySelectorAll("footer button.verdict")) {
+    b.disabled = locked;
+    b.title = locked
+      ? "Questions must be answered or closed (and drafts sent or deleted) before a verdict"
+      : "";
+  }
+}
+
+async function submit(verdict) {
+  if (openServerQuestions().length > 0) {
+    alert("The agent still owes answers on question threads — wait for them or close the threads.");
+    return;
+  }
+  if (state.questions.length > 0) {
+    alert("You have unsent questions — send them to the agent or delete them first.");
+    return;
+  }
+  if (verdict === "request_changes" && state.comments.length === 0 && !state.summary.trim()) {
+    if (!confirm("Request changes without any comments or summary?")) return;
+  }
+  if (verdict === "reject" && !confirm("Reject these changes? The agent will discard them.")) return;
+
+  const buttons = document.querySelectorAll("footer button");
+  buttons.forEach((b) => (b.disabled = true));
+
+  const comments = [...state.comments]
+    .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line))
+    .map(({ file, side, line, body }) => ({ file, side, line, body }));
+
+  try {
+    const res = await fetch("/api/submit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ verdict, summary: state.summary.trim(), comments }),
+    });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = (await res.json()).error || msg; } catch (e) { /* not json */ }
+      throw new Error(msg);
+    }
+  } catch (e) {
+    alert("Submit failed: " + e.message);
+    buttons.forEach((b) => (b.disabled = false));
+    updateFooter();
+    return;
+  }
+
+  try { localStorage.removeItem(draftKey()); } catch (e) { /* ignore */ }
+  state.done = true;
+  showDone(verdict, comments.length);
+}
+
+function showDone(verdict, n) {
+  document.body.textContent = "";
+  document.body.appendChild(el("div", { id: "done" }, [
+    el("div", { class: "big" }, verdict === "approve" ? "✅" : verdict === "reject" ? "⛔" : "📝"),
+    el("h2", {}, "Verdict sent: " + verdict.replace("_", " ")),
+    el("p", {}, n + (n === 1 ? " comment" : " comments") + " delivered to the agent. You can close this tab."),
+  ]));
+}
+
+function showFatal(msg) {
+  const app = $app();
+  app.textContent = "";
+  app.appendChild(el("div", { id: "done" }, [el("h2", {}, msg)]));
+}
+
+async function healthCheck() {
+  if (state.done) return;
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    if (!res.ok) throw new Error("bad status");
+    setBanner(false);
+  } catch (e) {
+    setBanner(true);
+  }
+}
+
+function setBanner(show) {
+  const b = document.getElementById("banner");
+  if (!b) return;
+  b.style.display = show ? "block" : "none";
+  if (show) {
+    b.textContent =
+      "Connection to the review server lost — your comments are saved locally. " +
+      "When the agent re-runs the review (agent-change-reviewer wait), reload this page.";
+  }
+}
+
+init();
+</script>
+</body>
+</html>

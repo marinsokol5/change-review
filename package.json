@@ -1,0 +1,39 @@
+{
+  "name": "agent-change-reviewer",
+  "version": "0.1.0",
+  "description": "Human-in-the-loop review for AI coding agents: inline diff UI, line comments, and a verdict piped back to the agent as JSON.",
+  "license": "MIT",
+  "author": "Marin Sokol",
+  "keywords": [
+    "code-review",
+    "ai-agents",
+    "human-in-the-loop",
+    "claude-code",
+    "codex",
+    "diff",
+    "cli"
+  ],
+  "type": "module",
+  "bin": {
+    "agent-change-reviewer": "bin/agent-change-reviewer.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "ui",
+    "skill"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepare": "tsc",
+    "demo": "node dist/cli.js review examples/demo.patch --title 'Demo review'"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

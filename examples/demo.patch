@@ -1,0 +1,31 @@
+diff --git a/src/greet.py b/src/greet.py
+new file mode 100644
+--- /dev/null
++++ b/src/greet.py
+@@ -0,0 +1,6 @@
++def greet(name: str) -> str:
++    if not name:
++        raise ValueError("name must not be empty")
++    return f"Hello, {name}!"
++
++
+diff --git a/src/app.py b/src/app.py
+--- a/src/app.py
++++ b/src/app.py
+@@ -1,8 +1,9 @@
+ import sys
++from greet import greet
+
+
+ def main() -> int:
+-    print("Hello, world!")
++    print(greet(sys.argv[1] if len(sys.argv) > 1 else "world"))
+     return 0
+
+
+@@ -12,4 +13,4 @@ def helper():
+-    return 1
++    return 2
+
+
+ # end
