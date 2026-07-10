@@ -24,6 +24,8 @@ export interface FileDiff {
   newPath: string | null;
   status: FileStatus;
   hunks: Hunk[];
+  /** Set on inter-round comparisons when the rounds disagree about the base contents. */
+  warning?: string;
 }
 
 export interface ReviewComment {

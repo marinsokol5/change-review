@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { interdiffFiles } from "./interdiff.js";
 import { parseUnifiedDiff } from "./patch.js";
 import * as session from "./session.js";
 import type { MenuDecision, ReviewComment, ReviewResult, Verdict } from "./types.js";
@@ -174,6 +175,39 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
         const viewRound = roundParam == null ? currentRound : Number(roundParam);
         if (!Number.isInteger(viewRound) || viewRound < 1 || viewRound > currentRound) {
           json(res, 404, { error: `no such round ${roundParam}` });
+          return;
+        }
+
+        // ?diffAgainst=A compares round A → the viewed round: a read-only interdiff
+        // with nothing to comment on, approve or reject — purely how the change evolved.
+        const againstParam = url.searchParams.get("diffAgainst");
+        if (againstParam != null) {
+          const against = Number(againstParam);
+          if (!Number.isInteger(against) || against < 1 || against > currentRound || against === viewRound) {
+            json(res, 404, { error: `cannot diff round ${viewRound} against "${againstParam}"` });
+            return;
+          }
+          const patchFor = (n: number) =>
+            n === currentRound ? session.readPatch(id) : session.readHistoryPatch(id, n);
+          const pa = patchFor(against);
+          const pb = patchFor(viewRound);
+          if (pa == null || pb == null) {
+            json(res, 404, { error: `round ${pa == null ? against : viewRound} is not available` });
+            return;
+          }
+          json(res, 200, {
+            request: r,
+            round: viewRound,
+            currentRound,
+            diffAgainst: against,
+            readOnly: true,
+            rounds,
+            verdict: null,
+            summary: "",
+            comments: [],
+            files: interdiffFiles(parseUnifiedDiff(pa), parseUnifiedDiff(pb)),
+            threads: [],
+          });
           return;
         }
 

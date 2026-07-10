@@ -31,16 +31,28 @@
   .stat-add { color: #3fb950; }
   .stat-del { color: #f85149; }
 
-  .rounds-nav { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .rounds-nav .label { color: var(--muted); font-size: 12px; margin-right: 2px; }
+  /* One line, newest round first; older rounds scroll off to the right. */
+  .rounds-nav { margin-top: 10px; display: flex; gap: 6px; align-items: center; overflow-x: auto; padding-bottom: 4px; }
+  .rounds-nav .label { color: var(--muted); font-size: 12px; margin-right: 2px; flex: none; }
   a.round-pill, span.round-pill {
-    font-size: 12px; padding: 2px 10px; border-radius: 10px;
+    font-size: 12px; padding: 2px 10px; border-radius: 10px; flex: none;
     border: 1px solid var(--border); color: var(--fg); text-decoration: none; white-space: nowrap;
   }
   a.round-pill:hover { border-color: var(--accent); color: var(--accent); }
   span.round-pill.viewing { border-color: var(--accent); color: var(--accent); background: rgba(68,147,248,.10); font-weight: 600; }
   .round-pill .rv { color: var(--muted); }
   span.round-pill.viewing .rv { color: var(--accent); }
+  a.round-cmp, span.round-cmp {
+    font-size: 13px; padding: 2px 6px; border-radius: 6px; line-height: 1; flex: none;
+    color: var(--muted); text-decoration: none; border: 1px solid transparent;
+  }
+  a.round-cmp:hover { color: var(--accent); border-color: var(--accent); }
+  span.round-cmp.active { color: var(--accent); border-color: var(--accent); background: rgba(68,147,248,.10); }
+
+  .file-warning {
+    padding: 6px 12px; font-size: 12px; color: #d29922;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
 
   #ro-notice {
     margin: 12px 20px -4px; padding: 8px 12px; border: 1px solid var(--border);
@@ -222,17 +234,25 @@ function openServerQuestions() {
   );
 }
 
-// null = latest/current round; a number = the historical round in the URL (/round/<n>).
+// round: null = latest/current round, a number = the round in the URL (/round/<n>).
+// diffAgainst: the round to compare against (?diffAgainst=<n>), or null for a normal view.
 function viewedRoundFromUrl() {
   const m = location.pathname.match(/^\/round\/(\d+)/);
-  return m ? Number(m[1]) : null;
+  const q = new URLSearchParams(location.search).get("diffAgainst");
+  return {
+    round: m ? Number(m[1]) : null,
+    diffAgainst: q != null && /^\d+$/.test(q) ? Number(q) : null,
+  };
 }
 
 async function init() {
-  const round = viewedRoundFromUrl();
+  const { round, diffAgainst } = viewedRoundFromUrl();
+  const params = [];
+  if (round != null) params.push("round=" + round);
+  if (diffAgainst != null) params.push("diffAgainst=" + diffAgainst);
   let data;
   try {
-    const res = await fetch("/api/session" + (round != null ? "?round=" + round : ""));
+    const res = await fetch("/api/session" + (params.length ? "?" + params.join("&") : ""));
     data = await res.json();
     if (!res.ok) {
       showFatal((data && data.error) || "Could not load this round.");
@@ -274,15 +294,16 @@ function stats(files) {
 }
 
 function renderAll() {
-  const { request, files, round, readOnly, rounds } = state.data;
+  const { request, files, round, readOnly, rounds, diffAgainst } = state.data;
   const s = stats(files);
   const app = $app();
   app.textContent = "";
 
+  const roundLabel = diffAgainst != null ? "round " + diffAgainst + " → round " + round : "round " + round;
   const headerKids = [
     el("h1", {}, request.title),
     el("div", { class: "meta" }, [
-      "session " + request.id + " · round " + round + " · " +
+      "session " + request.id + " · " + roundLabel + " · " +
         files.length + (files.length === 1 ? " file " : " files "),
       el("span", { class: "stat-add" }, "+" + s.add),
       " ",
@@ -296,7 +317,10 @@ function renderAll() {
   if (readOnly) app.appendChild(renderReadOnlyNotice());
 
   if (files.length === 0) {
-    app.appendChild(el("div", { id: "done" }, [el("p", {}, "The diff is empty — nothing to review.")]));
+    const msg = diffAgainst != null
+      ? "Rounds " + diffAgainst + " and " + round + " contain identical changes."
+      : "The diff is empty — nothing to review.";
+    app.appendChild(el("div", { id: "done" }, [el("p", {}, msg)]));
   }
   for (const f of files) app.appendChild(renderFile(f));
 
@@ -310,14 +334,17 @@ function renderAll() {
   }
 }
 
-// A pill per round, linking to /round/<n> (the current round links to "/"). Comments and
-// line numbers are tied to each round's own diff, so we open the round rather than trying
-// to show old anchors against the current diff.
+// A pill per round, linking to /round/<n> (the current round links to "/"), with a small
+// ⇄ between adjacent rounds that opens the diff *between* them. Comments and line numbers
+// are tied to each round's own diff, so we open the round rather than trying to show old
+// anchors against the current diff.
 function renderRoundsNav() {
-  const { rounds, round, currentRound } = state.data;
+  const { round, currentRound, diffAgainst } = state.data;
+  const rounds = [...state.data.rounds].reverse(); // newest first
   const nav = el("div", { class: "rounds-nav" }, [el("span", { class: "label" }, "Rounds:")]);
-  for (const r of rounds) {
-    const viewing = r.round === round;
+  rounds.forEach((r, i) => {
+    // While comparing, no round is "the one being viewed" — both pills stay links.
+    const viewing = r.round === round && diffAgainst == null;
     const isCurrent = r.round === currentRound;
     const kids = ["Round " + r.round];
     const suffix = r.verdict ? r.verdict.replace("_", " ") : isCurrent ? "current" : "";
@@ -327,12 +354,30 @@ function renderRoundsNav() {
     } else {
       nav.appendChild(el("a", { class: "round-pill", href: isCurrent ? "/" : "/round/" + r.round }, kids));
     }
-  }
+    if (i < rounds.length - 1) {
+      // Descending order: the ⇄ still compares older → newer.
+      const from = rounds[i + 1].round;
+      const to = r.round;
+      const title = "What changed between round " + from + " and round " + to;
+      const active = diffAgainst === from && round === to;
+      nav.appendChild(active
+        ? el("span", { class: "round-cmp active", title }, "⇄")
+        : el("a", { class: "round-cmp", href: "/round/" + to + "?diffAgainst=" + from, title }, "⇄"));
+    }
+  });
   return nav;
 }
 
 function renderReadOnlyNotice() {
-  const { round, verdict, summary, currentRound } = state.data;
+  const { round, verdict, summary, currentRound, diffAgainst } = state.data;
+  if (diffAgainst != null) {
+    return el("div", { id: "ro-notice" }, [
+      "Comparing round " + diffAgainst + " → round " + round +
+        " — how the change evolved between the two rounds. This view is read-only: " +
+        "comments and verdicts happen on the current round. ",
+      el("a", { href: "/" }, "Back to round " + currentRound + " (current)"),
+    ]);
+  }
   return el("div", { id: "ro-notice" }, [
     "Viewing round " + round + " — a read-only snapshot" +
       (verdict ? " (verdict: " + verdict.replace("_", " ") + ")" : "") +
@@ -447,6 +492,7 @@ function renderFile(f) {
       ]),
     ]),
   ]);
+  if (f.warning) sec.appendChild(el("div", { class: "file-warning" }, "⚠ " + f.warning));
   if (f.status === "binary") {
     sec.appendChild(el("div", { style: "padding:12px;color:var(--muted)" }, "Binary file changed (contents not shown)"));
     return sec;
