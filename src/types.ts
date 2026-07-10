@@ -88,6 +88,35 @@ export interface ApplyOutcome {
   error?: string;
 }
 
+/** A chunk (contiguous run of +/- lines, or a whole binary file) the reviewer skipped. */
+export interface SkippedChunk {
+  file: string;
+  /** 0-based hunk index in the round's patch (absent for binary chunks). */
+  hunk?: number;
+  /** 0-based run index within the hunk (absent for binary chunks). */
+  run?: number;
+  binary?: boolean;
+  kind: "add" | "delete" | "update" | "binary";
+  adds?: number;
+  dels?: number;
+  /** Base-side line number of the run's first deleted line. */
+  oldLine?: number;
+  /** Proposed-side line number of the run's first added line. */
+  newLine?: number;
+}
+
+/** Present when the reviewer approved with a per-chunk selection ("Apply N of M"). */
+export interface ChunksOutcome {
+  total: number;
+  applied: number;
+  skipped: SkippedChunk[];
+  /** Path to the selected-only unified diff (base → what was approved). Only on partial approves. */
+  appliedPatch?: string;
+  /** Path to the diff that turns a fully-applied tree into the approved subset
+   *  (worktree mode: `git apply` it to drop the skipped chunks). Only on partial approves. */
+  revertPatch?: string;
+}
+
 export interface ReviewResult {
   verdict: Verdict;
   summary: string;
@@ -98,6 +127,8 @@ export interface ReviewResult {
   decision?: MenuDecision;
   /** Present on approved proposal-mode reviews: how the deterministic apply went. */
   apply?: ApplyOutcome;
+  /** Present when the reviewer approved a per-chunk selection: what was applied vs skipped. */
+  chunks?: ChunksOutcome;
 }
 
 export interface SessionRequest {

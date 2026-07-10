@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Manual end-to-end test for the PreToolUse hook flow (run: bash test-hook.sh).
 set -u
-TH="$TMPDIR/reviewer-test-home"; REPO="$TMPDIR/reviewer-test-repo"
+TH="$TMPDIR/agent-change-reviewer-test-home"; REPO="$TMPDIR/agent-change-reviewer-test-repo"
 CLI="node $(cd "$(dirname "$0")" && pwd)/dist/cli.js"
-export REVIEWER_NO_OPEN=1
+export AGENT_CHANGE_REVIEWER_NO_OPEN=1
 
 hook_input() { # $1=tool $2=tool_input-json
   printf '{"session_id":"cs1","cwd":"%s","tool_name":"%s","tool_input":%s}' "$REPO" "$1" "$2"
@@ -11,7 +11,7 @@ hook_input() { # $1=tool $2=tool_input-json
 
 find_port() { # newest live server.json
   for _ in $(seq 1 60); do
-    SJ=$(ls -t "$TH"/.reviewer/sessions/*/server.json 2>/dev/null | head -1)
+    SJ=$(ls -t "$TH"/.agent-change-reviewer/sessions/*/server.json 2>/dev/null | head -1)
     if [ -n "${SJ:-}" ]; then node -pe "JSON.parse(require('fs').readFileSync('$SJ','utf8')).port"; return; fi
     sleep 0.25
   done
@@ -46,13 +46,13 @@ case "${1:-}" in
     curl -s -X POST "http://127.0.0.1:$PORT/api/decision" -H 'content-type: application/json' -d '{"action":"accept_session"}' > /dev/null
     wait $PID
     echo "--- hook stdout:"; cat "$TMPDIR/hook-out.json"
-    echo "--- always flags:"; ls "$TH/.reviewer/always-allow"
+    echo "--- always flags:"; ls "$TH/.agent-change-reviewer/always-allow"
     echo "--- second run (should allow instantly, no server):"
     hook_input Edit '{"file_path":"'"$REPO"'/app.ts","old_string":"line one","new_string":"line 1!"}' \
       | HOME="$TH" $CLI hook-run
     ;;
   review-request-changes)
-    rm -rf "$TH/.reviewer/always-allow"
+    rm -rf "$TH/.agent-change-reviewer/always-allow"
     hook_input Write '{"file_path":"'"$REPO"'/new.ts","content":"export const x = 1;\n"}' \
       | HOME="$TH" $CLI hook-run > "$TMPDIR/hook-out.json" 2> "$TMPDIR/hook-err.txt" &
     PID=$!

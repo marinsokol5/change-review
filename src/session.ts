@@ -4,17 +4,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyFileDiffToContent, filePathOf, filterFiles, type ChunkRef } from "./chunks.js";
 import type {
   AnswerInput,
   ApplyOutcome,
   CommentReply,
+  FileDiff,
   QuestionThread,
   ReviewResult,
   ServerInfo,
   SessionRequest,
 } from "./types.js";
 
-export const SESSIONS_ROOT = path.join(os.homedir(), ".reviewer", "sessions");
+export const SESSIONS_ROOT = path.join(os.homedir(), ".agent-change-reviewer", "sessions");
 
 export function sessionDir(id: string): string {
   return path.join(SESSIONS_ROOT, id);
@@ -27,7 +29,10 @@ const serverPath = (id: string) => path.join(sessionDir(id), "server.json");
 const threadsPath = (id: string) => path.join(sessionDir(id), "threads.json");
 const historyDir = (id: string) => path.join(sessionDir(id), "history");
 const stagedDir = (id: string) => path.join(sessionDir(id), "proposal");
+const stagedBaseDir = (id: string) => path.join(sessionDir(id), "proposal-base");
 const applyManifestPath = (id: string) => path.join(sessionDir(id), "apply.json");
+export const appliedPatchPath = (id: string) => path.join(sessionDir(id), "applied.patch");
+export const revertPatchPath = (id: string) => path.join(sessionDir(id), "revert.patch");
 
 function readJson<T>(p: string): T | null {
   try {
@@ -90,9 +95,12 @@ export function createSession(opts: {
   fs.writeFileSync(reqPath(id), JSON.stringify(req, null, 2));
   fs.writeFileSync(patchPath(id), opts.patch);
   fs.rmSync(resultPath(id), { force: true });
-  // A new round must not inherit the previous round's staged proposal.
+  // A new round must not inherit the previous round's staged proposal or chunk artifacts.
   fs.rmSync(stagedDir(id), { recursive: true, force: true });
+  fs.rmSync(stagedBaseDir(id), { recursive: true, force: true });
   fs.rmSync(applyManifestPath(id), { force: true });
+  fs.rmSync(appliedPatchPath(id), { force: true });
+  fs.rmSync(revertPatchPath(id), { force: true });
   return req;
 }
 
@@ -107,10 +115,13 @@ interface ApplyManifestEntry {
 const sha256 = (data: Buffer) => crypto.createHash("sha256").update(data).digest("hex");
 
 const stagedFilePath = (id: string, rel: string) => path.join(stagedDir(id), ...rel.split("/"));
+const stagedBaseFilePath = (id: string, rel: string) => path.join(stagedBaseDir(id), ...rel.split("/"));
 
 /**
  * Snapshot the proposed contents of the changed files into the session dir so an
  * approve verdict can be applied byte-for-byte even after the temp dir is gone.
+ * The base contents are snapshotted too, so a partial approve ("Apply N of M chunks")
+ * can rebuild base-plus-kept-chunks deterministically at verdict time.
  */
 export function stageProposal(id: string, root: string, files: Array<{ rel: string; src: string }>): void {
   const entries: ApplyManifestEntry[] = [];
@@ -125,27 +136,72 @@ export function stageProposal(id: string, root: string, files: Array<{ rel: stri
     const dest = stagedFilePath(id, f.rel);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, data);
+    if (base) {
+      const baseDest = stagedBaseFilePath(id, f.rel);
+      fs.mkdirSync(path.dirname(baseDest), { recursive: true });
+      fs.writeFileSync(baseDest, base);
+    }
     entries.push({ rel: f.rel, baseSha256: base ? sha256(base) : null, sha256: sha256(data) });
   }
   fs.writeFileSync(applyManifestPath(id), JSON.stringify({ files: entries }, null, 2));
 }
 
+function readStagedBase(id: string, f: ApplyManifestEntry): Buffer | null {
+  if (f.baseSha256 === null) return null;
+  let data: Buffer;
+  try {
+    data = fs.readFileSync(stagedBaseFilePath(id, f.rel));
+  } catch {
+    throw new Error(`no staged base for ${f.rel} — this session predates partial apply; open a new review`);
+  }
+  if (sha256(data) !== f.baseSha256) {
+    throw new Error(`staged base of ${f.rel} no longer matches the reviewed base`);
+  }
+  return data;
+}
+
 /**
  * Write the staged proposal into the working tree, exactly as reviewed.
+ * With `partial`, each file's target is computed deterministically from the selection:
+ * the staged proposal when fully kept, the reviewed base when fully skipped, and
+ * base-plus-kept-runs (exact line splice, no fuzzing) when partially kept.
  * All-or-nothing: if any file's current contents match neither the reviewed base
- * nor the proposal (it changed mid-review), nothing is written and the conflicts
+ * nor its target (it changed mid-review), nothing is written and the conflicts
  * are reported. Returns undefined when the session has no staged proposal.
  */
-export function applyProposal(id: string, cwd: string): ApplyOutcome | undefined {
+export function applyProposal(
+  id: string,
+  cwd: string,
+  partial?: { files: FileDiff[]; skipped: ChunkRef[] },
+): ApplyOutcome | undefined {
   const manifest = readJson<{ files: ApplyManifestEntry[] }>(applyManifestPath(id));
   if (!manifest) return undefined;
   const wrote: string[] = [];
   try {
+    const skipped = partial?.skipped ?? [];
+    const diffByPath = new Map((partial?.files ?? []).map((f) => [filePathOf(f), f]));
     const pending: Array<{ abs: string; data: Buffer; rel: string }> = [];
     const conflicts: string[] = [];
     for (const f of manifest.files) {
-      const data = fs.readFileSync(stagedFilePath(id, f.rel));
-      if (sha256(data) !== f.sha256) throw new Error(`staged copy of ${f.rel} no longer matches the reviewed contents`);
+      const staged = fs.readFileSync(stagedFilePath(id, f.rel));
+      if (sha256(staged) !== f.sha256) throw new Error(`staged copy of ${f.rel} no longer matches the reviewed contents`);
+      const refs = skipped.filter((r) => r.file === f.rel);
+      // Target contents under the selection; null = the file should not exist.
+      let target: Buffer | null;
+      if (refs.length === 0) {
+        target = staged;
+      } else {
+        const base = readStagedBase(id, f);
+        const fd = diffByPath.get(f.rel);
+        if (!fd) throw new Error(`no parsed diff for ${f.rel} — cannot apply a partial selection`);
+        const kept = filterFiles([fd], refs);
+        if (kept.length === 0) {
+          target = base; // every chunk skipped — the file stays at its base state
+        } else {
+          target = Buffer.from(applyFileDiffToContent(base === null ? "" : base.toString("utf8"), kept[0]), "utf8");
+        }
+      }
+      const targetSha = target === null ? null : sha256(target);
       const abs = path.resolve(cwd, f.rel);
       let currentSha: string | null = null;
       try {
@@ -153,12 +209,13 @@ export function applyProposal(id: string, cwd: string): ApplyOutcome | undefined
       } catch {
         // file absent
       }
-      if (currentSha === f.sha256) continue; // already has the proposed contents
+      if (currentSha === targetSha) continue; // already in the wanted state
       if (currentSha !== f.baseSha256) {
         conflicts.push(f.rel);
         continue;
       }
-      pending.push({ abs, data, rel: f.rel });
+      if (target === null) continue; // wanted absent; disk == base == absent was handled above
+      pending.push({ abs, data: target, rel: f.rel });
     }
     if (conflicts.length > 0) return { applied: false, wrote, conflicts };
     for (const p of pending) {

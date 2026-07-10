@@ -1,10 +1,18 @@
 import http from "node:http";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import {
+  describeSkipped,
+  filterFiles,
+  revertFiles,
+  serializePatch,
+  totalChunks,
+  validateChunkRefs,
+} from "./chunks.js";
 import { interdiffFiles } from "./interdiff.js";
 import { parseUnifiedDiff } from "./patch.js";
 import * as session from "./session.js";
-import type { MenuDecision, ReviewComment, ReviewResult, Verdict } from "./types.js";
+import type { ChunksOutcome, MenuDecision, ReviewComment, ReviewResult, Verdict } from "./types.js";
 
 const UI_FILE = fileURLToPath(new URL("../ui/index.html", import.meta.url));
 const MENU_FILE = fileURLToPath(new URL("../ui/menu.html", import.meta.url));
@@ -72,6 +80,8 @@ interface Submission {
   verdict: Verdict;
   summary: string;
   comments: SubmittedComment[];
+  /** Chunk refs the reviewer deselected before hitting Apply; validated against the parsed patch. */
+  skipped?: unknown[];
 }
 
 function validateSubmission(body: unknown): Submission | string {
@@ -80,6 +90,10 @@ function validateSubmission(body: unknown): Submission | string {
   const b = body as Record<string, unknown>;
   if (!verdicts.includes(b.verdict as Verdict)) return `verdict must be one of: ${verdicts.join(", ")}`;
   const summary = typeof b.summary === "string" ? b.summary : "";
+  if (b.skipped !== undefined && !Array.isArray(b.skipped)) return "skipped must be an array of chunk refs";
+  if (Array.isArray(b.skipped) && b.verdict !== "approve") {
+    return "a chunk selection only makes sense with an approve verdict";
+  }
   if (!Array.isArray(b.comments)) return "comments must be an array";
   const comments: SubmittedComment[] = [];
   for (const c of b.comments as Array<Record<string, unknown>>) {
@@ -101,7 +115,12 @@ function validateSubmission(body: unknown): Submission | string {
       ...(Number.isInteger(c.thread) && { thread: c.thread as number }),
     });
   }
-  return { verdict: b.verdict as Verdict, summary, comments };
+  return {
+    verdict: b.verdict as Verdict,
+    summary,
+    comments,
+    ...(Array.isArray(b.skipped) && { skipped: b.skipped }),
+  };
 }
 
 function listenWithFallback(server: http.Server, preferred: number): Promise<number> {
@@ -362,6 +381,34 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           return;
         }
         const current = session.readRequest(id) ?? request;
+        // A per-chunk selection ("Apply N of M") rides along with an approve verdict.
+        // Chunk identity is (file, hunk, run) against this round's parsed patch.
+        let chunks: ChunksOutcome | undefined;
+        let partial: Parameters<typeof session.applyProposal>[2];
+        if (v.skipped) {
+          if (current.kind === "hook") {
+            json(res, 400, { error: "hook sessions are all-or-nothing — no chunk selection" });
+            return;
+          }
+          const files = parseUnifiedDiff(session.readPatch(id) ?? "");
+          const validated = validateChunkRefs(files, v.skipped);
+          if (typeof validated === "string") {
+            json(res, 400, { error: validated });
+            return;
+          }
+          const total = totalChunks(files);
+          chunks = { total, applied: total - validated.length, skipped: describeSkipped(files, validated) };
+          if (validated.length > 0) {
+            partial = { files, skipped: validated };
+            // The two deterministic artifacts a non-proposal agent needs to act on a
+            // partial approve: the selected-only diff (base → approved subset) and the
+            // diff that strips the skipped chunks out of an already-applied tree.
+            fs.writeFileSync(session.appliedPatchPath(id), serializePatch(filterFiles(files, validated)));
+            fs.writeFileSync(session.revertPatchPath(id), serializePatch(revertFiles(files, validated)));
+            chunks.appliedPatch = session.appliedPatchPath(id);
+            chunks.revertPatch = session.revertPatchPath(id);
+          }
+        }
         // Attach each discussed comment's thread (agent replies + follow-ups) so the
         // verdict is self-contained — the `thread` id is dropped from the output.
         const threads = session.readThreads(id);
@@ -370,8 +417,9 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           return t ? { ...c, discussion: t.messages } : c;
         });
         // Approving a proposal-mode review applies the reviewed bytes to the repo
-        // right here, so "approve" deterministically lands exactly what was shown.
-        const apply = v.verdict === "approve" ? session.applyProposal(id, current.cwd) : undefined;
+        // right here, so "approve" deterministically lands exactly what was shown —
+        // filtered down to the kept chunks when the reviewer made a selection.
+        const apply = v.verdict === "approve" ? session.applyProposal(id, current.cwd, partial) : undefined;
         const result: ReviewResult = {
           verdict: v.verdict,
           summary: v.summary,
@@ -380,9 +428,10 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           round: current.round,
           submittedAt: new Date().toISOString(),
           ...(apply && { apply }),
+          ...(chunks && { chunks }),
         };
         session.writeResult(id, result);
-        json(res, 200, { ok: true, ...(apply && { apply }) });
+        json(res, 200, { ok: true, ...(apply && { apply }), ...(chunks && { chunks }) });
         finishAfterVerdict();
       } else if (req.method === "POST" && url.pathname === "/api/decision") {
         // Quick-menu decisions on hook sessions; "review" is not posted — the menu navigates to /review.

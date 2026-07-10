@@ -9,7 +9,7 @@ import { relabel } from "./proposal.js";
 import * as session from "./session.js";
 import type { ReviewResult } from "./types.js";
 
-export const ALWAYS_DIR = path.join(os.homedir(), ".reviewer", "always-allow");
+export const ALWAYS_DIR = path.join(os.homedir(), ".agent-change-reviewer", "always-allow");
 const HOOK_COMMAND = "agent-change-reviewer hook-run";
 /** The agent kills the hook after the configured timeout; decide a bit earlier so we can still answer. */
 const INSTALL_TIMEOUT_SECS = 600;
@@ -124,7 +124,7 @@ function applyEdit(content: string, oldStr: string, newStr: string, replaceAll: 
 }
 
 function diffStrings(rel: string, oldText: string | null, newText: string | null): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reviewer-hook-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-change-reviewer-hook-"));
   try {
     let oldPath = "/dev/null";
     if (oldText != null) {

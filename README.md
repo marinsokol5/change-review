@@ -32,7 +32,7 @@ Restart your agent session afterwards so it picks the instructions up.
 ## How a review flows
 
 1. The agent runs `agent-change-reviewer review --worktree --title "Add retry logic"` (or `--proposal <dir>` to review changes *before* they're written, or passes any unified diff). The command blocks.
-2. Your browser opens an inline diff. Hover a line, click `+`, leave comments. Then pick one of four actions — **Approve**, **Request changes**, **Reject**, or **Discuss** (send your comments to the agent for a reply before you decide) — optionally with an overall summary.
+2. Your browser opens an inline diff. Hover a line, click `+`, leave comments. Every chunk (one contiguous run of changed lines) carries a checkbox in the gutter — untick the ones you don't want, per file or all at once. Then pick an action — **Apply** (lands exactly the selected chunks: all = classic approve, none = reject), **Request changes**, or **Discuss** (send your comments to the agent for a reply before you decide) — optionally with an overall summary.
 3. The verdict JSON lands on the agent's stdout:
 
 ```json
@@ -47,8 +47,10 @@ Restart your agent session afterwards so it picks the instructions up.
 }
 ```
 
-4. Want the agent's take before deciding? Leave your comments, then click **Discuss** — it sends every comment to the agent for a reply-per-comment (a bare ACK when it agrees, exit 5 → `agent-change-reviewer answer`) in the same review revision, without touching any files. The replies thread inline; you can still decide at any time (a discussion never blocks the verdict). Your comments ride along with the eventual verdict, now with the discussion attached.
+4. Want the agent's take before deciding? Leave your comments, then click **Discuss** — it sends every comment to the agent for a reply-per-comment (a bare ACK when it agrees, exit 5 → `agent-change-reviewer answer`) in the same review revision, without touching any files. The replies thread inline, and each thread stays open: hit **Reply** under an answer to write back, and the follow-up goes to the agent for another reply — as many turns as you need. You can still decide at any time (a discussion never blocks the verdict). Your comments ride along with the eventual verdict, now with the whole discussion attached.
 5. On `request_changes` the agent fixes every comment and re-submits with `--session <id> --replies replies.json` — round 2 shows each of your comments with the agent's reply threaded under it ("fixed — …" or why it deliberately didn't). One reply per comment, enforced by the CLI. Earlier rounds stay browsable — round pills in the header link to `/round/N`, a read-only snapshot of that round's diff with your comments, the agent's replies, and any discussion in place. The small ⇄ between two pills shows what changed *between* those rounds (`/round/N?diffAgainst=M`) — how the agent's revision evolved — with nothing to comment on or decide there.
+
+A partial Apply is still an `approve` (exit 0): the verdict's `chunks` field says what was skipped, and two ready-made patches (`appliedPatch`, `revertPatch`) let the agent land exactly the approved subset deterministically. In proposal mode the CLI itself writes base-plus-selected-chunks — sha256-verified against what was reviewed, all-or-nothing.
 
 Exit codes: `0` approve · `2` request_changes · `3` reject · `4` pending (no verdict yet) · `5` discussion (reply to each comment) · `1` error.
 
@@ -58,7 +60,7 @@ Exit codes: `0` approve · `2` request_changes · `3` reject · `4` pending (no 
 |---|---|
 | `agent-change-reviewer review [patch]` | review a unified diff (file, stdin, or `-`) |
 | `agent-change-reviewer review --worktree [--base REF]` | review uncommitted changes (`git diff`); `git add -N` untracked files first |
-| `agent-change-reviewer review --proposal <dir>` | review a dir of proposed file contents (repo-relative paths) diffed against the working tree; on approve the CLI writes the reviewed bytes into the repo itself (all-or-nothing, reported under `apply` in the verdict JSON) |
+| `agent-change-reviewer review --proposal <dir>` | review a dir of proposed file contents (repo-relative paths) diffed against the working tree; on approve the CLI writes the reviewed bytes — filtered to the selected chunks — into the repo itself (all-or-nothing, reported under `apply`/`chunks` in the verdict JSON) |
 | `agent-change-reviewer wait <id>` | keep waiting on a pending review; restarts the UI server if it died |
 | `agent-change-reviewer answer <id> <answers.json>` | reply to the reviewer's Discuss comments, then keep waiting for the verdict |
 | `agent-change-reviewer result <id>` | print the verdict or open discussion if any (non-blocking) |
@@ -95,7 +97,7 @@ When the hook is off (or the menu times out after ~10 minutes), Claude Code fall
 
 ## How it works
 
-- Each review is a **session** under `~/.reviewer/sessions/<id>/` — `request.json`, `patch.diff`, `result.json` once submitted, plus per-round history.
+- Each review is a **session** under `~/.agent-change-reviewer/sessions/<id>/` — `request.json`, `patch.diff`, `result.json` once submitted, plus per-round history.
 - The UI server runs as a **detached process**, so it survives the agent's command timing out. `agent-change-reviewer review`/`wait` just poll for the result file; if the CLI's own timeout fires, it exits with code 4 ("pending") and the JSON tells the agent what to do next based on `wait-mode`:
   - **`stop` (default):** the agent ends its turn and tells you the review URL; when you've submitted, tell the agent (it picks the verdict up with `agent-change-reviewer result <id>`). No idle agent turns — long reviews cost you nothing while you're away.
   - **`poll`:** the agent keeps re-running `agent-change-reviewer wait` until you submit. Snappier handoff, but each idle cycle is an agent turn — on API billing, a long-unattended review keeps burning tokens. Set it with `agent-change-reviewer config wait-mode poll`.

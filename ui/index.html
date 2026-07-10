@@ -11,6 +11,8 @@
     --add-bg: rgba(46,160,67,.18); --add-num: rgba(46,160,67,.30);
     --del-bg: rgba(248,81,73,.18); --del-num: rgba(248,81,73,.30);
     --green: #238636; --orange: #9e6a03; --red: #da3633;
+    /* "Lit up" selection idiom: included = bright neutral, skipped = dimmed — no hue borrowed from the diff. */
+    --sel: #e6edf3; --sel-dim: #b7bfc7; --sel-bright: #fff;
   }
   * { box-sizing: border-box; }
   body {
@@ -73,6 +75,20 @@
   .badge.renamed, .badge.binary { color: var(--accent); border-color: var(--accent); }
   .file-header .path { font-size: 13px; word-break: break-all; }
   .file-header .fstat { margin-left: auto; font-size: 12px; white-space: nowrap; }
+  .file-toggle { flex: none; display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .file-toggle input {
+    appearance: none; -webkit-appearance: none; margin: 0;
+    width: 13px; height: 13px; border: 1px solid var(--muted); border-radius: 5px;
+    background: transparent; cursor: pointer;
+  }
+  .file-toggle input:checked {
+    border-color: var(--sel);
+    background: var(--sel) url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5l3.5 3.5L13 4.5"/%3E%3C/svg%3E') center/10px no-repeat;
+  }
+  .file-toggle input:indeterminate {
+    border-color: var(--sel);
+    background: var(--sel) url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" d="M3.5 8h9"/%3E%3C/svg%3E') center/10px no-repeat;
+  }
 
   table.diff { width: 100%; border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
   .diff td { padding: 0 8px; vertical-align: top; }
@@ -90,6 +106,29 @@
   tr.line.del .intra { background: rgba(248,81,73,.45); border-radius: 2px; }
   tr.line:hover td { background: rgba(68,147,248,.08); }
   tr.hunk td { background: #121d2f; color: var(--muted); padding: 4px 12px; font-size: 12px; }
+  /* Chunk-select gutter: checkbox on the run's first line, clickable bracket down the rest. */
+  .diff td.sel { width: 22px; min-width: 22px; padding: 0; user-select: none; position: relative; }
+  .diff td.sel input {
+    appearance: none; -webkit-appearance: none; display: block; margin: 3px auto 0;
+    width: 13px; height: 13px; border: 1px solid var(--muted); border-radius: 5px;
+    background: transparent; cursor: pointer;
+  }
+  .diff td.sel input:checked {
+    border-color: var(--sel);
+    background: var(--sel) url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5l3.5 3.5L13 4.5"/%3E%3C/svg%3E') center/10px no-repeat;
+  }
+  .diff td.sel.run-bar { cursor: pointer; }
+  .diff td.sel.run-bar::after {
+    content: ""; position: absolute; left: 9px; top: 0; bottom: 0; width: 3px;
+    border-radius: 2px; background: var(--sel-dim);
+  }
+  .diff td.sel.run-bar:hover::after { background: var(--sel-bright); box-shadow: 0 0 0 1px var(--sel-bright); }
+  tr.line.skipped td.sel.run-bar::after { background: var(--border); }
+  tr.line.skipped td.num, tr.line.skipped td.marker, tr.line.skipped .code-inner { opacity: .4; }
+  tr.line.skipped.add { background: rgba(46,160,67,.05); }
+  tr.line.skipped.add td.num { background: rgba(46,160,67,.08); }
+  tr.line.skipped.del { background: rgba(248,81,73,.05); }
+  tr.line.skipped.del td.num { background: rgba(248,81,73,.08); }
   .nonl { color: var(--muted); font-size: 11px; font-style: italic; }
 
   button.add-comment {
@@ -160,6 +199,10 @@
   button.verdict.request { background: var(--orange); }
   button.verdict.reject { background: var(--red); }
   button.verdict.discuss { background: var(--accent); margin-right: 4px; }
+  button.verdict.apply { background: var(--green); }
+  button.verdict.apply.none { background: var(--red); }
+  .bulk { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .bulk a { color: var(--accent); cursor: pointer; }
 
   #done { text-align: center; padding: 80px 20px; }
   #done .big { font-size: 44px; }
@@ -172,7 +215,7 @@
 <script>
 "use strict";
 
-const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false };
+const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false, skipped: new Set(), fileCtls: [], replyDrafts: {} };
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -201,11 +244,60 @@ function fileLabel(f) {
 }
 function commentAnchor(c) { return c.file + ANCHOR_SEP + c.side + ANCHOR_SEP + c.line; }
 
-function draftKey() { return "reviewer:" + state.data.request.id + ":" + state.data.request.round; }
+// --- Per-chunk apply selection (UI prototype — the selection is not sent to the server yet) ---
+
+function chunkable() {
+  // Historical rounds and compare views are read-only; hook verdicts gate a single
+  // tool call, so they stay all-or-nothing.
+  return !state.data.readOnly && state.data.request.kind !== "hook";
+}
+function chunkKey(fp, i) { return fp + ANCHOR_SEP + "chunk" + ANCHOR_SEP + i; }
+// key -> { file, hunk, run } | { file, binary: true } — the wire shape /api/submit expects.
+const chunkRefByKey = new Map();
+/** Contiguous blocks of +/- lines inside a hunk — the update/delete/add units the
+ *  apply toggles work on (a hunk is a parser artifact; its context padding isn't a change).
+ *  Mirror of hunkRuns in src/chunks.ts — chunk identity is shared with the server. */
+function hunkRuns(lines) {
+  const runs = [];
+  let start = -1;
+  lines.forEach((ln, i) => {
+    const changed = ln.type === "add" || ln.type === "del";
+    if (changed && start < 0) start = i;
+    if (!changed && start >= 0) { runs.push({ start, end: i - 1 }); start = -1; }
+  });
+  if (start >= 0) runs.push({ start, end: lines.length - 1 });
+  return runs;
+}
+function fileChunkKeys(f) {
+  const fp = filePath(f);
+  if (f.status === "binary") {
+    const k = chunkKey(fp, "bin");
+    chunkRefByKey.set(k, { file: fp, binary: true });
+    return [k];
+  }
+  const keys = [];
+  f.hunks.forEach((h, hi) => hunkRuns(h.lines).forEach((r, ri) => {
+    const k = chunkKey(fp, hi + "." + ri);
+    chunkRefByKey.set(k, { file: fp, hunk: hi, run: ri });
+    keys.push(k);
+  }));
+  return keys;
+}
+function allChunkKeys() {
+  const out = [];
+  for (const f of state.data.files) out.push(...fileChunkKeys(f));
+  return out;
+}
+function chunkCounts() {
+  const all = allChunkKeys();
+  return { total: all.length, selected: all.filter((k) => !state.skipped.has(k)).length };
+}
+
+function draftKey() { return "agent-change-reviewer:" + state.data.request.id + ":" + state.data.request.round; }
 function saveDraft() {
   try {
     localStorage.setItem(draftKey(), JSON.stringify({
-      comments: state.comments, summary: state.summary,
+      comments: state.comments, summary: state.summary, skipped: [...state.skipped],
     }));
   } catch (e) { /* private mode etc. */ }
   updateFooter();
@@ -218,6 +310,7 @@ function restoreDraft() {
       // discussion threads after a reload.
       state.comments = (d.comments || []).map((c) => ({ ...c, uid: state.uid++ }));
       state.summary = d.summary || "";
+      state.skipped = new Set(d.skipped || []);
     }
   } catch (e) { /* ignore corrupt drafts */ }
 }
@@ -322,7 +415,9 @@ function renderAll() {
       : "The diff is empty — nothing to review.";
     app.appendChild(el("div", { id: "done" }, [el("p", {}, msg)]));
   }
+  state.fileCtls = [];
   for (const f of files) app.appendChild(renderFile(f));
+  refreshChunkControls();
 
   if (readOnly) {
     // A past round is a frozen snapshot: its diff plus its comments/replies, no verdict controls.
@@ -481,17 +576,33 @@ function renderFile(f) {
     if (l.type === "add") add++;
     else if (l.type === "del") del++;
   }
-  const sec = el("section", { class: "file" }, [
-    el("div", { class: "file-header" }, [
-      el("span", { class: "badge " + f.status }, f.status),
-      el("span", { class: "path" }, fileLabel(f)),
-      el("span", { class: "fstat" }, [
-        el("span", { class: "stat-add" }, "+" + add),
-        " ",
-        el("span", { class: "stat-del" }, "−" + del),
-      ]),
+  const header = el("div", { class: "file-header" }, [
+    el("span", { class: "badge " + f.status }, f.status),
+    el("span", { class: "path" }, fileLabel(f)),
+    el("span", { class: "fstat" }, [
+      el("span", { class: "stat-add" }, "+" + add),
+      " ",
+      el("span", { class: "stat-del" }, "−" + del),
     ]),
   ]);
+  if (chunkable()) {
+    const keys = fileChunkKeys(f);
+    if (keys.length > 0) {
+      const cb = el("input", {
+        type: "checkbox",
+        onchange: () => {
+          const skip = !cb.checked;
+          for (const k of keys) skip ? state.skipped.add(k) : state.skipped.delete(k);
+          refreshChunkControls();
+          saveDraft();
+        },
+      });
+      const count = el("span", {}, "");
+      state.fileCtls.push({ cb, count, keys });
+      header.appendChild(el("label", { class: "file-toggle", title: "Include or skip every chunk in this file" }, [cb, count]));
+    }
+  }
+  const sec = el("section", { class: "file" }, [header]);
   if (f.warning) sec.appendChild(el("div", { class: "file-warning" }, "⚠ " + f.warning));
   if (f.status === "binary") {
     sec.appendChild(el("div", { style: "padding:12px;color:var(--muted)" }, "Binary file changed (contents not shown)"));
@@ -499,13 +610,21 @@ function renderFile(f) {
   }
   const tbody = el("tbody", {});
   const fp = filePath(f);
-  for (const h of f.hunks) {
+  f.hunks.forEach((h, hi) => {
     computeIntraHunk(h.lines);
     tbody.appendChild(el("tr", { class: "hunk" }, [
-      el("td", { colspan: "4" },
+      el("td", { colspan: "5" },
         "@@ -" + h.oldStart + "," + h.oldCount + " +" + h.newStart + "," + h.newCount + " @@ " + (h.section || "")),
     ]));
-    for (const ln of h.lines) {
+    // Map each changed line to its run; the run's first line carries the apply toggle.
+    const runOf = new Array(h.lines.length).fill(null);
+    const runFirst = new Set();
+    hunkRuns(h.lines).forEach((r, ri) => {
+      const key = chunkKey(fp, hi + "." + ri);
+      runFirst.add(r.start);
+      for (let i = r.start; i <= r.end; i++) runOf[i] = key;
+    });
+    h.lines.forEach((ln, li) => {
       const side = ln.type === "del" ? "old" : "new";
       const lineNo = side === "old" ? ln.oldLine : ln.newLine;
       const anchor = fp + ANCHOR_SEP + side + ANCHOR_SEP + lineNo;
@@ -528,17 +647,69 @@ function renderFile(f) {
           onclick: () => openComposer(anchor, fp, side, lineNo),
         }, "+"));
       }
-      tbody.appendChild(el("tr", { class: "line " + ln.type, "data-anchor": anchor }, [
+      const codeCell = el("td", { class: "code" }, [el("span", { class: "code-inner" }, codeKids)]);
+      const selTd = el("td", { class: "sel" });
+      const attrs = { class: "line " + ln.type, "data-anchor": anchor };
+      const rkey = runOf[li];
+      if (rkey && chunkable()) {
+        attrs["data-run"] = rkey;
+        if (runFirst.has(li)) {
+          selTd.appendChild(el("input", {
+            type: "checkbox", class: "run-cb", "data-run-cb": rkey,
+            onchange: () => toggleChunk(rkey),
+          }));
+        } else {
+          selTd.classList.add("run-bar");
+          selTd.title = "Part of the chunk above — click to toggle it";
+          selTd.onclick = () => toggleChunk(rkey);
+        }
+      }
+      tbody.appendChild(el("tr", attrs, [
+        selTd,
         el("td", { class: "num" }, ln.oldLine == null ? "" : String(ln.oldLine)),
         el("td", { class: "num" }, ln.newLine == null ? "" : String(ln.newLine)),
         el("td", { class: "marker" }, markerKids),
-        el("td", { class: "code" }, codeKids),
+        codeCell,
       ]));
-    }
-  }
+    });
+  });
   const table = el("table", { class: "diff" }, [tbody]);
   sec.appendChild(table);
   return sec;
+}
+
+function toggleChunk(key) {
+  if (state.skipped.has(key)) state.skipped.delete(key);
+  else state.skipped.add(key);
+  refreshChunkControls();
+  saveDraft();
+}
+
+function setAllChunks(selected) {
+  state.skipped = selected ? new Set() : new Set(allChunkKeys());
+  refreshChunkControls();
+  saveDraft();
+}
+
+/** Sync every run toggle, file checkbox, and dimmed line with state.skipped. */
+function refreshChunkControls() {
+  for (const row of document.querySelectorAll("tr.line[data-run]")) {
+    row.classList.toggle("skipped", state.skipped.has(row.getAttribute("data-run")));
+  }
+  for (const cb of document.querySelectorAll("input.run-cb")) {
+    const off = state.skipped.has(cb.getAttribute("data-run-cb"));
+    cb.checked = !off;
+    cb.title = off
+      ? "Skipped — this chunk won't be applied. Click to include it."
+      : "Will be applied. Click to skip this chunk.";
+  }
+  for (const ctl of state.fileCtls) {
+    const total = ctl.keys.length;
+    const sel = ctl.keys.filter((k) => !state.skipped.has(k)).length;
+    ctl.cb.checked = sel === total && total > 0;
+    ctl.cb.indeterminate = sel > 0 && sel < total;
+    ctl.count.textContent = total > 1 ? sel + "/" + total : "";
+  }
 }
 
 function threadBox(anchor) {
@@ -547,7 +718,7 @@ function threadBox(anchor) {
     const lineRow = document.querySelector('tr.line[data-anchor="' + cssEscape(anchor) + '"]');
     if (!lineRow) return null;
     const box = el("div", { class: "thread-box" });
-    row = el("tr", { class: "thread", "data-anchor": anchor }, [el("td", { colspan: "4" }, [box])]);
+    row = el("tr", { class: "thread", "data-anchor": anchor }, [el("td", { colspan: "5" }, [box])]);
     lineRow.after(row);
   }
   return row.querySelector(".thread-box");
@@ -567,7 +738,8 @@ function cleanupThread(anchor) {
 function openComposer(anchor, file, side, line, existing) {
   const box = threadBox(anchor);
   if (!box) return;
-  const open = box.querySelector(".composer textarea");
+  // :scope > — a reply composer nested in a comment card must not hijack the line's "+".
+  const open = box.querySelector(":scope > .composer textarea");
   if (open) { open.focus(); return; }
 
   const ta = el("textarea", { placeholder: "Leave a comment for the agent…" });
@@ -638,11 +810,13 @@ function renderCommentCard(c) {
     discussion,
   ]);
   renderDiscussion(c, discussion);
-  const composer = box.querySelector(".composer");
+  // :scope > — insertBefore needs a direct child of box, not a reply composer inside a card.
+  const composer = box.querySelector(":scope > .composer");
   box.insertBefore(card, composer);
 }
 
-/** Render a discussed comment's agent reply into its card (read-only). */
+/** Render a discussed comment's thread into its card. Once the agent has replied,
+ *  a Reply box keeps the discussion going — a follow-up reopens the thread. */
 function renderDiscussion(c, container) {
   container.textContent = "";
   if (c.thread == null) return;
@@ -658,10 +832,77 @@ function renderDiscussion(c, container) {
       m.body,
     ]));
   }
+  appendThreadTail(container, t);
+}
+
+/** Below a thread's messages: a waiting note while the agent owes a reply, or a
+ *  Reply box to continue the discussion once it has answered. */
+function appendThreadTail(container, t) {
   const last = t.messages[t.messages.length - 1];
-  const awaiting = last && last.from === "user";
-  container.appendChild(el("div", { class: "qstatus" },
-    awaiting ? "Sent to the agent — waiting for a reply." : "The agent replied."));
+  if (last && last.from === "user") {
+    container.appendChild(el("div", { class: "qstatus" }, "Sent to the agent — waiting for a reply."));
+  } else if (!canAsk()) {
+    container.appendChild(el("div", { class: "qstatus" }, "The agent replied."));
+  } else if (state.replyDrafts[t.id] != null) {
+    container.appendChild(replyComposer(t.id));
+  } else {
+    container.appendChild(el("div", { class: "actions" }, [
+      el("a", { onclick: () => openReply(t.id) }, "Reply"),
+    ]));
+  }
+}
+
+function openReply(threadId) {
+  state.replyDrafts[threadId] = "";
+  renderAllComments();
+  const ta = document.querySelector('.composer[data-thread="' + threadId + '"] textarea');
+  if (ta) ta.focus();
+}
+
+/** Follow-up composer for an answered thread. The draft lives in state.replyDrafts so
+ *  the thread poll's re-render doesn't eat typing; sending reopens the thread, and the
+ *  waiting CLI hands it back to the agent for another reply. */
+function replyComposer(threadId) {
+  const ta = el("textarea", {
+    placeholder: "Reply to the agent…",
+    oninput: () => { state.replyDrafts[threadId] = ta.value; },
+  });
+  ta.value = state.replyDrafts[threadId];
+  const cancel = () => { delete state.replyDrafts[threadId]; renderAllComments(); };
+  const send = async () => {
+    const body = ta.value.trim();
+    if (!body || state.sending) return;
+    state.sending = true;
+    updateFooter();
+    try {
+      const res = await fetch("/api/questions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items: [{ thread: threadId, body }] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      delete state.replyDrafts[threadId];
+      state.data.threads = data.threads;
+      renderAllComments();
+    } catch (e) {
+      alert("Reply failed: " + e.message);
+    } finally {
+      state.sending = false;
+      updateFooter();
+    }
+  };
+  ta.onkeydown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
+    if (e.key === "Escape") cancel();
+  };
+  return el("div", { class: "composer", "data-thread": threadId }, [
+    ta,
+    el("div", { class: "row" }, [
+      el("button", { class: "btn primary", onclick: send }, "Send reply"),
+      el("button", { class: "btn", onclick: cancel }, "Cancel"),
+    ]),
+  ]);
 }
 
 function threadAnchor(t) { return t.file + ANCHOR_SEP + t.side + ANCHOR_SEP + t.line; }
@@ -669,8 +910,6 @@ function threadAnchor(t) { return t.file + ANCHOR_SEP + t.side + ANCHOR_SEP + t.
 // Fallback for a server discussion thread whose local comment draft is gone (e.g. cleared
 // localStorage) — render the whole thread standalone so nothing is silently lost.
 function renderThreadCard(t) {
-  const last = t.messages[t.messages.length - 1];
-  const awaiting = last && last.from === "user";
   const card = el("div", { class: "qthread" });
   for (const m of t.messages) {
     card.appendChild(el("div", { class: "msg " + m.from }, [
@@ -678,8 +917,7 @@ function renderThreadCard(t) {
       m.body,
     ]));
   }
-  card.appendChild(el("div", { class: "qstatus" },
-    awaiting ? "Waiting for the agent's reply." : "The agent replied."));
+  appendThreadTail(card, t);
   return card;
 }
 
@@ -748,8 +986,31 @@ function renderFooter() {
     input,
     el("span", { class: "count", id: "count" }, ""),
   ];
-  // Hook sessions can't reply mid-review (the agent is blocked in the PreToolUse call),
-  // so they get only the terminal verdicts — no Discuss.
+  if (!chunkable()) {
+    // Hook sessions gate a single tool call: all-or-nothing verdicts, and no Discuss
+    // (the agent is blocked in the PreToolUse call and can't reply mid-review).
+    kids.push(
+      el("button", {
+        class: "verdict approve", onclick: () => submit("approve"),
+        title: "Changes are applied as-is, this review is closed, comments are forwarded to the LLM as fun-facts.",
+      }, "Approve"),
+      el("button", {
+        class: "verdict request", onclick: () => submit("request_changes"),
+        title: "Agent submits a new revision, applying changes discussed.",
+      }, "Request changes"),
+      el("button", {
+        class: "verdict reject", onclick: () => submit("reject"),
+        title: "Changes are rejected as-is, this review is closed.",
+      }, "Reject"),
+    );
+    return el("footer", {}, kids);
+  }
+  kids.push(el("span", { class: "bulk" }, [
+    "Chunks: ",
+    el("a", { onclick: () => setAllChunks(true) }, "all"),
+    " · ",
+    el("a", { onclick: () => setAllChunks(false) }, "none"),
+  ]));
   if (canAsk()) {
     kids.push(el("button", {
       class: "verdict discuss", id: "discuss", onclick: discussAll,
@@ -758,17 +1019,10 @@ function renderFooter() {
   }
   kids.push(
     el("button", {
-      class: "verdict approve", onclick: () => submit("approve"),
-      title: "Changes are applied as-is, this review is closed, comments are forwarded to the LLM as fun-facts.",
-    }, "Approve"),
-    el("button", {
       class: "verdict request", onclick: () => submit("request_changes"),
       title: "Agent submits a new revision, applying changes discussed.",
     }, "Request changes"),
-    el("button", {
-      class: "verdict reject", onclick: () => submit("reject"),
-      title: "Changes are rejected as-is, this review is closed.",
-    }, "Reject"),
+    el("button", { class: "verdict apply", id: "apply", onclick: submitApply }, "Apply"),
   );
   return el("footer", {}, kids);
 }
@@ -788,11 +1042,44 @@ function updateFooter() {
     discussBtn.disabled = state.sending || pending === 0;
     discussBtn.textContent = pending > 0 ? "Discuss (" + pending + ")" : "Discuss";
   }
-  // A discussion never blocks the verdict — the three terminal buttons stay live and
-  // keep their descriptive tooltips.
+  // A discussion never blocks the verdict — the terminal buttons stay live.
+
+  // The Apply button reads out exactly what pressing it would do.
+  const applyBtn = document.getElementById("apply");
+  if (applyBtn) {
+    const { total, selected } = chunkCounts();
+    applyBtn.classList.toggle("none", total > 0 && selected === 0);
+    if (total === 0) {
+      applyBtn.textContent = "Apply";
+      applyBtn.title = "The diff is empty — closes the review as approved.";
+    } else if (selected === 0) {
+      applyBtn.textContent = "Reject all";
+      applyBtn.title = "No chunks selected — discards the whole change and closes the review.";
+    } else if (selected === total) {
+      applyBtn.textContent = total === 1 ? "Apply" : "Apply all " + total + " chunks";
+      applyBtn.title = "Applies every chunk as-is and closes the review. Comments are forwarded to the agent as fun-facts.";
+    } else {
+      applyBtn.textContent = "Apply " + selected + " of " + total + " chunks";
+      applyBtn.title = "Applies only the selected chunks; the " + (total - selected) + " skipped " +
+        ((total - selected) === 1 ? "chunk is" : "chunks are") + " discarded.";
+    }
+  }
 }
 
-async function submit(verdict) {
+async function submitApply() {
+  const { total, selected } = chunkCounts();
+  if (total > 0 && selected === 0) return submit("reject");
+  if (selected < total) {
+    const skipped = total - selected;
+    if (!confirm("Apply " + selected + " of " + total + " chunks? The " + skipped + " skipped " +
+      (skipped === 1 ? "chunk" : "chunks") + " will be discarded.")) return;
+  }
+  // Stale draft keys (from an older render of this round) have no ref and are dropped.
+  const skippedRefs = [...state.skipped].map((k) => chunkRefByKey.get(k)).filter(Boolean);
+  return submit("approve", { total, selected }, skippedRefs);
+}
+
+async function submit(verdict, applyInfo, skippedRefs) {
   if (verdict === "request_changes" && state.comments.length === 0 && !state.summary.trim()) {
     if (!confirm("Request changes without any comments or summary?")) return;
   }
@@ -805,17 +1092,20 @@ async function submit(verdict) {
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line))
     .map(({ file, side, line, body, thread }) => ({ file, side, line, body, ...(thread != null && { thread }) }));
 
+  let outcome = {};
   try {
     const res = await fetch("/api/submit", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ verdict, summary: state.summary.trim(), comments }),
+      body: JSON.stringify({
+        verdict,
+        summary: state.summary.trim(),
+        comments,
+        ...(skippedRefs && { skipped: skippedRefs }),
+      }),
     });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try { msg = (await res.json()).error || msg; } catch (e) { /* not json */ }
-      throw new Error(msg);
-    }
+    try { outcome = await res.json(); } catch (e) { /* not json */ }
+    if (!res.ok) throw new Error(outcome.error || res.statusText);
   } catch (e) {
     alert("Submit failed: " + e.message);
     buttons.forEach((b) => (b.disabled = false));
@@ -825,14 +1115,26 @@ async function submit(verdict) {
 
   try { localStorage.removeItem(draftKey()); } catch (e) { /* ignore */ }
   state.done = true;
-  showDone(verdict, comments.length);
+  showDone(verdict, comments.length, applyInfo, outcome.apply);
 }
 
-function showDone(verdict, n) {
+function showDone(verdict, n, applyInfo, apply) {
+  const heading = verdict === "approve" && applyInfo && applyInfo.total > 0
+    ? (applyInfo.selected === applyInfo.total
+        ? "Applied all " + applyInfo.total + (applyInfo.total === 1 ? " chunk" : " chunks")
+        : "Applied " + applyInfo.selected + " of " + applyInfo.total + " chunks")
+    : "Verdict sent: " + verdict.replace("_", " ");
+  const failed = apply && apply.applied === false;
   document.body.textContent = "";
   document.body.appendChild(el("div", { id: "done" }, [
-    el("div", { class: "big" }, verdict === "approve" ? "✅" : verdict === "reject" ? "⛔" : "📝"),
-    el("h2", {}, "Verdict sent: " + verdict.replace("_", " ")),
+    el("div", { class: "big" }, failed ? "⚠️" : verdict === "approve" ? "✅" : verdict === "reject" ? "⛔" : "📝"),
+    el("h2", {}, failed ? "Approved, but nothing was written" : heading),
+    failed
+      ? el("p", {}, apply.conflicts && apply.conflicts.length
+          ? "These files changed mid-review, so no file was touched (all-or-nothing): " +
+            apply.conflicts.join(", ") + ". The agent sees this in the verdict and can rebuild the proposal."
+          : "Apply failed: " + (apply.error || "unknown error") + ". The agent sees this in the verdict.")
+      : null,
     el("p", {}, n + (n === 1 ? " comment" : " comments") + " delivered to the agent. You can close this tab."),
   ]));
 }

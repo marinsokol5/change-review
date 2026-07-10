@@ -29,16 +29,17 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
   };
 
   for (const line of text.split("\n")) {
+    // "\ No newline at end of file" — may also follow the hunk's last line, after
+    // the announced counts are exhausted, so it's handled before the count gate.
+    if (hunk && line.charAt(0) === "\\") {
+      const last = hunk.lines[hunk.lines.length - 1];
+      if (last) last.noNewline = true;
+      continue;
+    }
     // While inside a hunk, consume exactly the announced number of lines so that
     // file content starting with "---", "+++" or "diff " is never mistaken for a header.
     if (hunk && (oldRemaining > 0 || newRemaining > 0)) {
       const c = line.charAt(0);
-      if (c === "\\") {
-        // "\ No newline at end of file"
-        const last = hunk.lines[hunk.lines.length - 1];
-        if (last) last.noNewline = true;
-        continue;
-      }
       if (c === "+" && newRemaining > 0) {
         hunk.lines.push({ type: "add", oldLine: null, newLine: newNo++, text: line.slice(1) });
         newRemaining--;

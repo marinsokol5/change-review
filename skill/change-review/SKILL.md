@@ -7,7 +7,7 @@ description: Open an interactive human review of proposed file changes. The user
 
 `agent-change-reviewer` opens an inline diff in the user's browser. The user comments on specific lines and picks a verdict; the command blocks until then and prints the verdict JSON to stdout.
 
-Run it from the repo root. Never run it in the background — the blocking call IS the review. ALWAYS run `agent-change-reviewer` commands with the command sandbox disabled: it binds localhost and writes `~/.reviewer/`, both of which sandboxes block (EPERM).
+Run it from the repo root. Never run it in the background — the blocking call IS the review. ALWAYS run `agent-change-reviewer` commands with the command sandbox disabled: it binds localhost and writes `~/.agent-change-reviewer/`, both of which sandboxes block (EPERM).
 
 ## Invoking — pick one mode
 
@@ -31,7 +31,7 @@ Stage under exactly `/tmp/change-review/` — `agent-change-reviewer install` pr
 
 New files are fine (they diff against nothing). File deletions can't be expressed in this mode — use worktree mode for those.
 
-On approve, the CLI itself writes the reviewed files into the repo, byte-for-byte what the user saw — do NOT re-write them yourself. The verdict JSON's `apply` field tells you how it went (see "Approve in proposal mode" below).
+On approve, the CLI itself writes the reviewed files into the repo, byte-for-byte what the user saw — filtered down to the chunks the user selected if they approved only a subset — do NOT re-write them yourself. The verdict JSON's `apply` field tells you how it went (see "Approve in proposal mode" below), and `chunks` describes a partial selection (see "Partial approve").
 
 **Patch mode.** If you already have a unified diff: `agent-change-reviewer review changes.patch`, or pipe it on stdin.
 
@@ -52,7 +52,7 @@ stdout is JSON; the exit code mirrors the verdict:
 
 | exit | verdict | what you do |
 |------|---------|-------------|
-| 0 | `approve` | worktree/patch mode: keep the changes and continue; proposal mode: the CLI already applied them — check `apply` (below) |
+| 0 | `approve` | worktree/patch mode: keep the changes and continue; proposal mode: the CLI already applied them — check `apply` (below). If `chunks` is present and `applied < total`, the user approved only a subset — see "Partial approve" |
 | 2 | `request_changes` | address EVERY comment, then re-submit with `--session <id> --replies replies.json` (see below) |
 | 3 | `reject` | discard the changes (worktree mode: `git restore` the touched files), tell the user, ask how to proceed |
 | 4 | pending | follow the JSON `hint`: wait-mode `stop` = end your turn, let the user resume you; `poll` = `agent-change-reviewer wait <session-id>` |
@@ -89,6 +89,27 @@ When a proposal-mode review is approved, the CLI deterministically writes the re
 - `applied: false` with `conflicts` — those files changed in the working tree mid-review, so NOTHING was written (all-or-nothing). Rebuild the proposal against the current files and submit a new review round.
 - `applied: false` with `error` — an I/O problem; `wrote` lists what landed before it. Tell the user and resolve before retrying.
 
+## Partial approve — the `chunks` field
+
+The reviewer can deselect individual chunks (a chunk = one contiguous run of changed lines, or a whole binary file) and press "Apply N of M chunks". That is still an `approve` (exit 0), but the verdict JSON gains a `chunks` field:
+
+```json
+{ "verdict": "approve",
+  "chunks": { "total": 4, "applied": 2,
+    "skipped": [ { "file": "src/app.py", "hunk": 1, "run": 0, "kind": "update",
+                   "dels": 1, "adds": 1, "oldLine": 21, "newLine": 21 } ],
+    "appliedPatch": "/home/user/.agent-change-reviewer/sessions/<id>/applied.patch",
+    "revertPatch": "/home/user/.agent-change-reviewer/sessions/<id>/revert.patch" } }
+```
+
+Skipped chunks are REJECTED content: do not apply them, do not fold them into later edits, and do not re-propose them unless the user asks. What you do next depends on the mode:
+
+- **Proposal mode:** nothing — the CLI already wrote exactly the selected chunks (`apply` reflects it); the skipped ones were never written.
+- **Worktree mode:** your working tree still contains ALL the changes, including the skipped ones. Remove them with `git apply <revertPatch>` (verify first with `git apply --check <revertPatch>`) — it deterministically turns the fully-changed tree into the approved subset. A skipped *binary* file cannot be expressed in that patch — restore it yourself (`git restore <file>`).
+- **Patch mode:** apply `<appliedPatch>` (the selected-only diff against the base) instead of your original patch.
+
+`skipped[]` coordinates are 0-based `hunk`/`run` indexes into that round's diff (`kind`: add / delete / update / binary; `oldLine`/`newLine` locate the first affected line) — useful to tell the user what you dropped, or to rebuild a later proposal without the rejected parts.
+
 ## Discussion — reply to each comment (exit 5)
 
 Instead of deciding, the user can click **Discuss** to send you their line comments and ask you to reply to each. The command then exits 5 with the comments on stdout:
@@ -106,7 +127,7 @@ Reply to **every** comment, honestly and concretely — a brief ACK is fine when
 agent-change-reviewer answer <session-id> answers.json
 ```
 
-`agent-change-reviewer answer` posts your replies (keyed by each comment's `thread` id) and then blocks like `agent-change-reviewer wait` (same timeout/pending rules). If the user discusses more comments, you'll get another exit 5 the same way. Do NOT change files while discussing — a discussion is conversation, not a change request; wait for the verdict.
+`agent-change-reviewer answer` posts your replies (keyed by each comment's `thread` id) and then blocks like `agent-change-reviewer wait` (same timeout/pending rules). Discussions are multi-turn: if the user discusses more comments — or replies back to one of your answers — you'll get another exit 5 the same way; a follow-up on an existing thread keeps its `thread` id and carries the earlier exchange in that comment's `history`. Do NOT change files while discussing — a discussion is conversation, not a change request; wait for the verdict.
 
 ## Re-submitting after request_changes (exit 2)
 
