@@ -207,6 +207,20 @@ export function readHistory(id: string): ReviewResult[] {
   }
 }
 
+/** The archived patch for a completed round, or null if that round isn't in history. */
+export function readHistoryPatch(id: string, round: number): string | null {
+  try {
+    return fs.readFileSync(path.join(historyDir(id), `round-${round}.patch`), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** The archived verdict for a completed round, or null if that round isn't in history. */
+export function readHistoryResult(id: string, round: number): ReviewResult | null {
+  return readJson<ReviewResult>(path.join(historyDir(id), `round-${round}.result.json`));
+}
+
 export function readThreads(id: string): QuestionThread[] {
   return readJson<QuestionThread[]>(threadsPath(id)) ?? [];
 }
@@ -343,17 +357,17 @@ export async function waitForResult(id: string, timeoutMs: number): Promise<Revi
 
 export type Outcome =
   | { kind: "verdict"; result: ReviewResult }
-  | { kind: "questions"; threads: QuestionThread[] };
+  | { kind: "discussion"; threads: QuestionThread[] };
 
-/** Like waitForResult, but also returns early when the user sends question threads
- *  for the agent to answer (review sessions only — hook sessions can't answer). */
+/** Like waitForResult, but also returns early when the user hits "Discuss" — sending
+ *  comments the agent must reply to (review sessions only — hook sessions can't reply). */
 export async function waitForOutcome(id: string, timeoutMs: number): Promise<Outcome | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const r = readResult(id);
     if (r) return { kind: "verdict", result: r };
     const open = openQuestions(readThreads(id));
-    if (open.length > 0) return { kind: "questions", threads: open };
+    if (open.length > 0) return { kind: "discussion", threads: open };
     if (Date.now() >= deadline) return null;
     await new Promise((res) => setTimeout(res, 500));
   }

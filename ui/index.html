@@ -31,11 +31,22 @@
   .stat-add { color: #3fb950; }
   .stat-del { color: #f85149; }
 
-  details.history { margin-top: 10px; font-size: 13px; color: var(--fg); }
-  details.history summary { cursor: pointer; color: var(--accent); }
-  details.history .round { margin: 8px 0 8px 14px; }
-  details.history .verdict { font-weight: 600; }
-  details.history .c { color: var(--muted); margin-left: 14px; }
+  .rounds-nav { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .rounds-nav .label { color: var(--muted); font-size: 12px; margin-right: 2px; }
+  a.round-pill, span.round-pill {
+    font-size: 12px; padding: 2px 10px; border-radius: 10px;
+    border: 1px solid var(--border); color: var(--fg); text-decoration: none; white-space: nowrap;
+  }
+  a.round-pill:hover { border-color: var(--accent); color: var(--accent); }
+  span.round-pill.viewing { border-color: var(--accent); color: var(--accent); background: rgba(68,147,248,.10); font-weight: 600; }
+  .round-pill .rv { color: var(--muted); }
+  span.round-pill.viewing .rv { color: var(--accent); }
+
+  #ro-notice {
+    margin: 12px 20px -4px; padding: 8px 12px; border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 4px; font-size: 13px; color: var(--muted);
+  }
+  #ro-notice a { color: var(--accent); }
 
   section.file { margin: 16px 20px; border: 1px solid var(--border); border-radius: 6px; }
   .file-header {
@@ -84,7 +95,16 @@
   .comment-card .actions { margin-top: 4px; font-size: 12px; }
   .comment-card .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
 
-  .comment-card.question { border-color: #8957e5; }
+  .comment-card.discussed { border-color: #8957e5; }
+  .comment-card .discussion { margin-top: 8px; }
+  .comment-card .discussion .msg { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .comment-card .discussion .msg .who { font-weight: 600; margin-right: 6px; }
+  .comment-card .discussion .msg.user .who { color: #a371f7; }
+  .comment-card .discussion .msg.agent .who { color: #3fb950; }
+  .comment-card .discussion .qstatus { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .comment-card .discussion .actions { margin-top: 4px; font-size: 12px; }
+  .comment-card .discussion .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
+
   .qtag { font-size: 11px; font-weight: 600; color: #a371f7; margin-bottom: 2px; }
   .qthread { border: 1px solid #8957e5; border-radius: 6px; padding: 8px 10px; margin: 6px 0; background: var(--bg); }
   .qthread.closed { opacity: .6; border-color: var(--border); }
@@ -95,12 +115,6 @@
   .qthread .qstatus { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .qthread .actions { margin-top: 4px; font-size: 12px; }
   .qthread .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
-
-  .composer .kind { display: flex; gap: 6px; margin: 0 0 6px; }
-  .composer .kind .btn.active { border-color: var(--accent); color: var(--accent); }
-
-  details.history .reply { margin: 0 0 6px 28px; padding: 1px 8px; border-left: 2px solid var(--accent); white-space: pre-wrap; }
-  details.history .reply .who { color: var(--accent); font-weight: 600; margin-right: 6px; }
 
   .composer { margin: 6px 0; }
   .composer textarea {
@@ -133,6 +147,7 @@
   button.verdict.approve { background: var(--green); }
   button.verdict.request { background: var(--orange); }
   button.verdict.reject { background: var(--red); }
+  button.verdict.discuss { background: var(--accent); margin-right: 4px; }
 
   #done { text-align: center; padding: 80px 20px; }
   #done .big { font-size: 44px; }
@@ -145,7 +160,7 @@
 <script>
 "use strict";
 
-const state = { data: null, comments: [], questions: [], summary: "", uid: 1, done: false, sending: false };
+const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false };
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -178,7 +193,7 @@ function draftKey() { return "reviewer:" + state.data.request.id + ":" + state.d
 function saveDraft() {
   try {
     localStorage.setItem(draftKey(), JSON.stringify({
-      comments: state.comments, questions: state.questions, summary: state.summary,
+      comments: state.comments, summary: state.summary,
     }));
   } catch (e) { /* private mode etc. */ }
   updateFooter();
@@ -187,8 +202,9 @@ function restoreDraft() {
   try {
     const d = JSON.parse(localStorage.getItem(draftKey()) || "null");
     if (d) {
+      // Restored comments keep their `thread` id, so they re-link to the server's
+      // discussion threads after a reload.
       state.comments = (d.comments || []).map((c) => ({ ...c, uid: state.uid++ }));
-      state.questions = (d.questions || []).map((q) => ({ ...q, uid: state.uid++ }));
       state.summary = d.summary || "";
     }
   } catch (e) { /* ignore corrupt drafts */ }
@@ -206,20 +222,32 @@ function openServerQuestions() {
   );
 }
 
+// null = latest/current round; a number = the historical round in the URL (/round/<n>).
+function viewedRoundFromUrl() {
+  const m = location.pathname.match(/^\/round\/(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
 async function init() {
+  const round = viewedRoundFromUrl();
   let data;
   try {
-    const res = await fetch("/api/session");
+    const res = await fetch("/api/session" + (round != null ? "?round=" + round : ""));
     data = await res.json();
+    if (!res.ok) {
+      showFatal((data && data.error) || "Could not load this round.");
+      return;
+    }
   } catch (e) {
     showFatal("Could not reach the review server. Restart it with: agent-change-reviewer wait <session-id>");
     return;
   }
   state.data = data;
   document.title = "agent-change-reviewer — " + data.request.title;
-  restoreDraft();
+  // Only the current round is editable, so drafts (and thread polling) apply only there.
+  if (!data.readOnly) restoreDraft();
   renderAll();
-  setInterval(() => { healthCheck(); pollThreads(); }, 3000);
+  setInterval(() => { healthCheck(); if (!state.data.readOnly) pollThreads(); }, 3000);
 }
 
 async function pollThreads() {
@@ -230,7 +258,7 @@ async function pollThreads() {
     const body = await res.json();
     if (JSON.stringify(body.threads) !== JSON.stringify(state.data.threads || [])) {
       state.data.threads = body.threads;
-      renderAllThreads();
+      renderAllComments();
       updateFooter();
     }
   } catch (e) { /* offline — healthCheck shows the banner */ }
@@ -246,7 +274,7 @@ function stats(files) {
 }
 
 function renderAll() {
-  const { request, files, history } = state.data;
+  const { request, files, round, readOnly, rounds } = state.data;
   const s = stats(files);
   const app = $app();
   app.textContent = "";
@@ -254,59 +282,86 @@ function renderAll() {
   const headerKids = [
     el("h1", {}, request.title),
     el("div", { class: "meta" }, [
-      "session " + request.id + " · round " + request.round + " · " +
+      "session " + request.id + " · round " + round + " · " +
         files.length + (files.length === 1 ? " file " : " files "),
       el("span", { class: "stat-add" }, "+" + s.add),
       " ",
       el("span", { class: "stat-del" }, "−" + s.del),
     ]),
   ];
-  if (history && history.length) headerKids.push(renderHistory(history));
+  // The rounds nav only appears once there's more than the current round to look at.
+  if (rounds && rounds.length > 1) headerKids.push(renderRoundsNav());
   app.appendChild(el("header", {}, headerKids));
+
+  if (readOnly) app.appendChild(renderReadOnlyNotice());
 
   if (files.length === 0) {
     app.appendChild(el("div", { id: "done" }, [el("p", {}, "The diff is empty — nothing to review.")]));
   }
   for (const f of files) app.appendChild(renderFile(f));
 
-  app.appendChild(renderFooter());
-  renderAllThreads();
-  for (const c of [...state.comments]) renderCommentCard(c);
-  for (const q of [...state.questions]) renderQuestionCard(q);
-  updateFooter();
+  if (readOnly) {
+    // A past round is a frozen snapshot: its diff plus its comments/replies, no verdict controls.
+    renderHistoricalComments();
+  } else {
+    app.appendChild(renderFooter());
+    renderAllComments();
+    updateFooter();
+  }
 }
 
-function renderHistory(history) {
-  const attrs = { class: "history" };
-  // Replies mean the agent just answered this round's comments — that's what the
-  // user is here to verify, so don't hide it behind a click.
-  const latest = history[history.length - 1];
-  if (latest && latest.comments.some((c) => c.reply)) attrs.open = "";
-  const d = el("details", attrs, [
-    el("summary", {}, "Previous rounds (" + history.length + ")"),
-  ]);
-  const prevThreads = (state.data.threads || []).filter((t) => t.round < state.data.request.round);
-  for (const r of history) {
-    const kids = [
-      el("div", { class: "verdict" },
-        "Round " + r.round + ": " + r.verdict.replace("_", " ") + (r.summary ? " — " + r.summary : "")),
-    ];
-    for (const c of r.comments) {
-      kids.push(el("div", { class: "c" }, c.file + ":" + c.line + " (" + c.side + ") — " + c.body));
-      if (c.reply) kids.push(el("div", { class: "reply" }, [el("span", { class: "who" }, "agent"), c.reply]));
+// A pill per round, linking to /round/<n> (the current round links to "/"). Comments and
+// line numbers are tied to each round's own diff, so we open the round rather than trying
+// to show old anchors against the current diff.
+function renderRoundsNav() {
+  const { rounds, round, currentRound } = state.data;
+  const nav = el("div", { class: "rounds-nav" }, [el("span", { class: "label" }, "Rounds:")]);
+  for (const r of rounds) {
+    const viewing = r.round === round;
+    const isCurrent = r.round === currentRound;
+    const kids = ["Round " + r.round];
+    const suffix = r.verdict ? r.verdict.replace("_", " ") : isCurrent ? "current" : "";
+    if (suffix) kids.push(el("span", { class: "rv" }, " · " + suffix));
+    if (viewing) {
+      nav.appendChild(el("span", { class: "round-pill viewing" }, kids));
+    } else {
+      nav.appendChild(el("a", { class: "round-pill", href: isCurrent ? "/" : "/round/" + r.round }, kids));
     }
-    for (const t of prevThreads.filter((x) => x.round === r.round)) {
-      kids.push(el("div", { class: "c" },
-        t.file + ":" + t.line + " (" + t.side + ") — question thread" + (t.closed ? " (closed)" : "")));
-      for (const m of t.messages) {
-        kids.push(el("div", { class: "reply" }, [
-          el("span", { class: "who" }, m.from === "user" ? "you" : "agent"), m.body,
-        ]));
-      }
-    }
-    d.appendChild(el("div", { class: "round" }, kids));
   }
-  return d;
+  return nav;
+}
+
+function renderReadOnlyNotice() {
+  const { round, verdict, summary, currentRound } = state.data;
+  return el("div", { id: "ro-notice" }, [
+    "Viewing round " + round + " — a read-only snapshot" +
+      (verdict ? " (verdict: " + verdict.replace("_", " ") + ")" : "") +
+      (summary ? ": " + summary : "") + ". ",
+    el("a", { href: "/" }, "Back to round " + currentRound + " (current)"),
+  ]);
+}
+
+/** Overlay a past round's comments — the body, its Discuss back-and-forth, and the
+ *  agent's cross-round reply — onto that round's diff, all read-only. */
+function renderHistoricalComments() {
+  for (const c of state.data.comments || []) {
+    const box = threadBox(commentAnchor(c));
+    if (!box) continue; // line isn't in this round's diff (shouldn't happen for stored comments)
+    const disc = el("div", { class: "discussion" });
+    // discussion[0] is the comment itself (shown as the card body); the rest is the exchange.
+    for (const m of (c.discussion || []).slice(1)) {
+      disc.appendChild(el("div", { class: "msg " + m.from }, [
+        el("span", { class: "who" }, m.from === "user" ? "you" : "agent"), m.body,
+      ]));
+    }
+    if (c.reply) {
+      disc.appendChild(el("div", { class: "msg agent" }, [el("span", { class: "who" }, "agent"), c.reply]));
+    }
+    box.appendChild(el("div", { class: "comment-card discussed" }, [
+      el("div", { class: "body" }, c.body),
+      disc,
+    ]));
+  }
 }
 
 // --- Intra-line (token-level) diff highlighting ---------------------------
@@ -418,17 +473,19 @@ function renderFile(f) {
         codeKids.push(ln.text === "" ? " " : ln.text);
       }
       if (ln.noNewline) codeKids.push(el("span", { class: "nonl" }, "  (no newline at end of file)"));
+      const markerKids = [sign];
+      // Past rounds are read-only — no new comments on a frozen snapshot.
+      if (!state.data.readOnly) {
+        markerKids.push(el("button", {
+          class: "add-comment",
+          title: "Comment on this line",
+          onclick: () => openComposer(anchor, fp, side, lineNo),
+        }, "+"));
+      }
       tbody.appendChild(el("tr", { class: "line " + ln.type, "data-anchor": anchor }, [
         el("td", { class: "num" }, ln.oldLine == null ? "" : String(ln.oldLine)),
         el("td", { class: "num" }, ln.newLine == null ? "" : String(ln.newLine)),
-        el("td", { class: "marker" }, [
-          sign,
-          el("button", {
-            class: "add-comment",
-            title: "Comment on this line",
-            onclick: () => openComposer(anchor, fp, side, lineNo),
-          }, "+"),
-        ]),
+        el("td", { class: "marker" }, markerKids),
         el("td", { class: "code" }, codeKids),
       ]));
     }
@@ -461,19 +518,13 @@ function cleanupThread(anchor) {
   if (row) cleanupThreadRow(row);
 }
 
-// opts: { kind: "comment"|"question", thread: <id> } — thread set = follow-up on a live question thread.
-function openComposer(anchor, file, side, line, existing, opts) {
-  opts = opts || {};
-  let kind = opts.kind || "comment";
+function openComposer(anchor, file, side, line, existing) {
   const box = threadBox(anchor);
   if (!box) return;
   const open = box.querySelector(".composer textarea");
   if (open) { open.focus(); return; }
 
-  const isFollowUp = opts.thread != null;
-  const ta = el("textarea", {
-    placeholder: isFollowUp ? "Follow-up question for the agent…" : "Leave a comment for the agent…",
-  });
+  const ta = el("textarea", { placeholder: "Leave a comment for the agent…" });
   if (existing) ta.value = existing.body;
 
   const composer = el("div", { class: "composer" });
@@ -482,20 +533,15 @@ function openComposer(anchor, file, side, line, existing, opts) {
     if (!body) return;
     if (existing) {
       existing.body = body;
-      const card = document.querySelector('.comment-card[data-uid="' + existing.uid + '"] .body');
-      if (card) card.textContent = body;
-      saveDraft();
-    } else if (kind === "question") {
-      const q = { uid: state.uid++, file, side, line, body };
-      if (isFollowUp) q.thread = opts.thread;
-      state.questions.push(q);
-      renderQuestionCard(q);
+      const bodyEl = document.querySelector('.comment-card[data-uid="' + existing.uid + '"] .body');
+      if (bodyEl) bodyEl.textContent = body;
       saveDraft();
     } else {
       const comment = { uid: state.uid++, file, side, line, body };
       state.comments.push(comment);
       renderCommentCard(comment);
       saveDraft();
+      updateFooter();
     }
     composer.remove();
     cleanupThread(anchor);
@@ -507,29 +553,7 @@ function openComposer(anchor, file, side, line, existing, opts) {
     if (e.key === "Escape") cancel();
   };
 
-  const saveBtn = el("button", { class: "btn primary", onclick: save }, "");
-  const setLabel = () => {
-    saveBtn.textContent = existing
-      ? "Update"
-      : kind === "question" ? (isFollowUp ? "Add follow-up" : "Add question") : "Add comment";
-  };
-  setLabel();
-
-  // New top-level drafts choose their type; edits and follow-ups keep it.
-  if (!existing && !isFollowUp && canAsk()) {
-    const bC = el("button", { class: "btn" }, "Comment");
-    const bQ = el("button", { class: "btn" }, "Question for the agent");
-    const setKind = (k) => {
-      kind = k;
-      bC.classList.toggle("active", k === "comment");
-      bQ.classList.toggle("active", k === "question");
-      setLabel();
-    };
-    bC.onclick = () => setKind("comment");
-    bQ.onclick = () => setKind("question");
-    setKind(kind);
-    composer.appendChild(el("div", { class: "kind" }, [bC, bQ]));
-  }
+  const saveBtn = el("button", { class: "btn primary", onclick: save }, existing ? "Update" : "Add comment");
 
   composer.appendChild(ta);
   composer.appendChild(el("div", { class: "row" }, [
@@ -548,59 +572,60 @@ function renderCommentCard(c) {
     state.comments = state.comments.filter((x) => x.uid !== c.uid);
     return;
   }
-  const card = el("div", { class: "comment-card", "data-uid": c.uid }, [
+  const discussed = c.thread != null;
+  const discussion = el("div", { class: "discussion" });
+  // Edit / Delete only before a comment is sent for discussion. Once the agent has it,
+  // the comment is locked — editing or deleting it would desync a conversation it can't re-answer.
+  const del = () => {
+    state.comments = state.comments.filter((x) => x.uid !== c.uid);
+    card.remove();
+    cleanupThread(anchor);
+    saveDraft();
+    updateFooter();
+  };
+  const card = el("div", { class: "comment-card" + (discussed ? " discussed" : ""), "data-uid": c.uid }, [
     el("div", { class: "body" }, c.body),
-    el("div", { class: "actions" }, [
+    discussed ? null : el("div", { class: "actions" }, [
       el("a", { onclick: () => openComposer(anchor, c.file, c.side, c.line, c) }, "Edit"),
-      el("a", {
-        onclick: () => {
-          state.comments = state.comments.filter((x) => x.uid !== c.uid);
-          card.remove();
-          cleanupThread(anchor);
-          saveDraft();
-        },
-      }, "Delete"),
+      el("a", { onclick: del }, "Delete"),
     ]),
+    discussion,
   ]);
+  renderDiscussion(c, discussion);
   const composer = box.querySelector(".composer");
   box.insertBefore(card, composer);
 }
 
-function renderQuestionCard(q) {
-  const anchor = q.file + ANCHOR_SEP + q.side + ANCHOR_SEP + q.line;
-  const box = threadBox(anchor);
-  if (!box) {
-    // Draft whose line no longer exists in this round's diff.
-    state.questions = state.questions.filter((x) => x.uid !== q.uid);
+/** Render a discussed comment's agent reply into its card (read-only). */
+function renderDiscussion(c, container) {
+  container.textContent = "";
+  if (c.thread == null) return;
+  const t = (state.data.threads || []).find((x) => x.id === c.thread);
+  if (!t) {
+    container.appendChild(el("div", { class: "qstatus" }, "Sent to the agent — waiting for a reply."));
     return;
   }
-  const card = el("div", { class: "comment-card question", "data-uid": q.uid }, [
-    el("div", { class: "qtag" }, (q.thread != null ? "follow-up" : "question") + " — not sent yet"),
-    el("div", { class: "body" }, q.body),
-    el("div", { class: "actions" }, [
-      el("a", {
-        onclick: () => openComposer(anchor, q.file, q.side, q.line, q, { kind: "question", thread: q.thread }),
-      }, "Edit"),
-      el("a", {
-        onclick: () => {
-          state.questions = state.questions.filter((x) => x.uid !== q.uid);
-          card.remove();
-          cleanupThread(anchor);
-          saveDraft();
-        },
-      }, "Delete"),
-    ]),
-  ]);
-  const composer = box.querySelector(".composer");
-  box.insertBefore(card, composer);
+  // messages[0] is the comment itself (already shown as the card body).
+  for (const m of t.messages.slice(1)) {
+    container.appendChild(el("div", { class: "msg " + m.from }, [
+      el("span", { class: "who" }, m.from === "user" ? "you" : "agent"),
+      m.body,
+    ]));
+  }
+  const last = t.messages[t.messages.length - 1];
+  const awaiting = last && last.from === "user";
+  container.appendChild(el("div", { class: "qstatus" },
+    awaiting ? "Sent to the agent — waiting for a reply." : "The agent replied."));
 }
 
 function threadAnchor(t) { return t.file + ANCHOR_SEP + t.side + ANCHOR_SEP + t.line; }
 
+// Fallback for a server discussion thread whose local comment draft is gone (e.g. cleared
+// localStorage) — render the whole thread standalone so nothing is silently lost.
 function renderThreadCard(t) {
   const last = t.messages[t.messages.length - 1];
-  const awaiting = !t.closed && last && last.from === "user";
-  const card = el("div", { class: "qthread" + (t.closed ? " closed" : "") });
+  const awaiting = last && last.from === "user";
+  const card = el("div", { class: "qthread" });
   for (const m of t.messages) {
     card.appendChild(el("div", { class: "msg " + m.from }, [
       el("span", { class: "who" }, m.from === "user" ? "you" : "agent"),
@@ -608,24 +633,25 @@ function renderThreadCard(t) {
     ]));
   }
   card.appendChild(el("div", { class: "qstatus" },
-    t.closed
-      ? "Closed without an answer — not blocking the verdict."
-      : awaiting
-        ? "Waiting for the agent's answer — the verdict is locked until every question is answered or closed."
-        : "Answered — follow up if this doesn't settle it."));
-  card.appendChild(el("div", { class: "actions" }, [
-    el("a", { onclick: () => openComposer(threadAnchor(t), t.file, t.side, t.line, null, { kind: "question", thread: t.id }) }, "Follow up"),
-    awaiting ? el("a", { onclick: () => closeThread(t) }, "Withdraw") : null,
-  ]));
+    awaiting ? "Waiting for the agent's reply." : "The agent replied."));
   return card;
 }
 
-/** (Re)render every live question thread of the current round into its anchor's thread box. */
-function renderAllThreads() {
+/** (Re)render every comment card and its discussion for the current round. */
+function renderAllComments() {
+  for (const card of document.querySelectorAll(".comment-card")) card.remove();
   for (const live of document.querySelectorAll(".live-threads")) live.remove();
-  const round = state.data.request.round;
+  for (const c of [...state.comments]) renderCommentCard(c);
+  renderOrphanThreads();
+  for (const row of document.querySelectorAll("tr.thread")) cleanupThreadRow(row);
+}
+
+/** Discussion threads with no matching local comment (localStorage lost) — shown standalone. */
+function renderOrphanThreads() {
+  const round = state.data.round;
+  const claimed = new Set(state.comments.map((c) => c.thread).filter((x) => x != null));
   for (const t of state.data.threads || []) {
-    if (t.round !== round) continue;
+    if (t.round !== round || t.closed || claimed.has(t.id)) continue;
     const box = threadBox(threadAnchor(t));
     if (!box) continue;
     let live = box.querySelector(".live-threads");
@@ -635,34 +661,16 @@ function renderAllThreads() {
     }
     live.appendChild(renderThreadCard(t));
   }
-  for (const row of document.querySelectorAll("tr.thread")) cleanupThreadRow(row);
 }
 
-async function closeThread(t) {
-  if (!confirm("Close this question without an answer? It will stop blocking the verdict.")) return;
-  try {
-    const res = await fetch("/api/close-thread", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ thread: t.id }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || res.statusText);
-    state.data.threads = data.threads;
-    renderAllThreads();
-    updateFooter();
-  } catch (e) {
-    alert("Close failed: " + e.message);
-  }
-}
-
-async function sendQuestions() {
-  if (state.sending || state.questions.length === 0) return;
+/** "Discuss": send every not-yet-discussed comment to the agent for a reply-per-comment. */
+async function discussAll() {
+  if (state.sending) return;
+  const pending = state.comments.filter((c) => c.thread == null);
+  if (pending.length === 0) return;
   state.sending = true;
   updateFooter();
-  const items = state.questions.map((q) => q.thread != null
-    ? { thread: q.thread, body: q.body }
-    : { file: q.file, side: q.side, line: q.line, body: q.body });
+  const items = pending.map((c) => ({ file: c.file, side: c.side, line: c.line, body: c.body }));
   try {
     const res = await fetch("/api/questions", {
       method: "POST",
@@ -671,16 +679,13 @@ async function sendQuestions() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
-    for (const q of state.questions) {
-      const card = document.querySelector('.comment-card[data-uid="' + q.uid + '"]');
-      if (card) card.remove();
-    }
-    state.questions = [];
+    // created[] is aligned to the items we sent, so link each comment to its new thread.
+    pending.forEach((c, i) => { c.thread = data.created[i]; });
     state.data.threads = data.threads;
     saveDraft();
-    renderAllThreads();
+    renderAllComments();
   } catch (e) {
-    alert("Send failed: " + e.message);
+    alert("Discuss failed: " + e.message);
   } finally {
     state.sending = false;
     updateFooter();
@@ -693,52 +698,55 @@ function renderFooter() {
     oninput: (e) => { state.summary = e.target.value; saveDraft(); },
   });
   input.value = state.summary;
-  return el("footer", {}, [
+  const kids = [
     input,
     el("span", { class: "count", id: "count" }, ""),
-    el("button", { class: "btn primary", id: "send-q", onclick: sendQuestions }, ""),
-    el("button", { class: "verdict approve", onclick: () => submit("approve") }, "Approve"),
-    el("button", { class: "verdict request", onclick: () => submit("request_changes") }, "Request changes"),
-    el("button", { class: "verdict reject", onclick: () => submit("reject") }, "Reject"),
-  ]);
+  ];
+  // Hook sessions can't reply mid-review (the agent is blocked in the PreToolUse call),
+  // so they get only the terminal verdicts — no Discuss.
+  if (canAsk()) {
+    kids.push(el("button", {
+      class: "verdict discuss", id: "discuss", onclick: discussAll,
+      title: "Agent replies in the same review revision, no content changes are made.",
+    }, "Discuss"));
+  }
+  kids.push(
+    el("button", {
+      class: "verdict approve", onclick: () => submit("approve"),
+      title: "Changes are applied as-is, this review is closed, comments are forwarded to the LLM as fun-facts.",
+    }, "Approve"),
+    el("button", {
+      class: "verdict request", onclick: () => submit("request_changes"),
+      title: "Agent submits a new revision, applying changes discussed.",
+    }, "Request changes"),
+    el("button", {
+      class: "verdict reject", onclick: () => submit("reject"),
+      title: "Changes are rejected as-is, this review is closed.",
+    }, "Reject"),
+  );
+  return el("footer", {}, kids);
 }
 
 function updateFooter() {
   const c = document.getElementById("count");
   if (!c) return;
   const n = state.comments.length;
-  const drafts = state.questions.length;
+  const pending = state.comments.filter((x) => x.thread == null).length;
   const awaiting = openServerQuestions().length;
   const parts = [n === 0 ? "no comments" : n + (n === 1 ? " comment" : " comments")];
-  if (drafts) parts.push(drafts + " unsent question" + (drafts === 1 ? "" : "s"));
   if (awaiting) parts.push(awaiting + " awaiting agent");
   c.textContent = parts.join(" · ");
 
-  const sendBtn = document.getElementById("send-q");
-  if (sendBtn) {
-    sendBtn.style.display = drafts ? "" : "none";
-    sendBtn.textContent = "Send " + drafts + " question" + (drafts === 1 ? "" : "s") + " to agent";
-    sendBtn.disabled = state.sending;
+  const discussBtn = document.getElementById("discuss");
+  if (discussBtn) {
+    discussBtn.disabled = state.sending || pending === 0;
+    discussBtn.textContent = pending > 0 ? "Discuss (" + pending + ")" : "Discuss";
   }
-
-  const locked = drafts > 0 || awaiting > 0;
-  for (const b of document.querySelectorAll("footer button.verdict")) {
-    b.disabled = locked;
-    b.title = locked
-      ? "Questions must be answered or closed (and drafts sent or deleted) before a verdict"
-      : "";
-  }
+  // A discussion never blocks the verdict — the three terminal buttons stay live and
+  // keep their descriptive tooltips.
 }
 
 async function submit(verdict) {
-  if (openServerQuestions().length > 0) {
-    alert("The agent still owes answers on question threads — wait for them or close the threads.");
-    return;
-  }
-  if (state.questions.length > 0) {
-    alert("You have unsent questions — send them to the agent or delete them first.");
-    return;
-  }
   if (verdict === "request_changes" && state.comments.length === 0 && !state.summary.trim()) {
     if (!confirm("Request changes without any comments or summary?")) return;
   }
@@ -749,7 +757,7 @@ async function submit(verdict) {
 
   const comments = [...state.comments]
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line))
-    .map(({ file, side, line, body }) => ({ file, side, line, body }));
+    .map(({ file, side, line, body, thread }) => ({ file, side, line, body, ...(thread != null && { thread }) }));
 
   try {
     const res = await fetch("/api/submit", {

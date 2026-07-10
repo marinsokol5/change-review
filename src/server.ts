@@ -63,10 +63,14 @@ function readBody(req: http.IncomingMessage, limit = 10 * 1024 * 1024): Promise<
   });
 }
 
+/** A submitted comment may carry the id of the discussion thread it was sent to via "Discuss";
+ *  the server attaches that thread's messages as the comment's `discussion` at verdict time. */
+type SubmittedComment = ReviewComment & { thread?: number };
+
 interface Submission {
   verdict: Verdict;
   summary: string;
-  comments: ReviewComment[];
+  comments: SubmittedComment[];
 }
 
 function validateSubmission(body: unknown): Submission | string {
@@ -76,7 +80,7 @@ function validateSubmission(body: unknown): Submission | string {
   if (!verdicts.includes(b.verdict as Verdict)) return `verdict must be one of: ${verdicts.join(", ")}`;
   const summary = typeof b.summary === "string" ? b.summary : "";
   if (!Array.isArray(b.comments)) return "comments must be an array";
-  const comments: ReviewComment[] = [];
+  const comments: SubmittedComment[] = [];
   for (const c of b.comments as Array<Record<string, unknown>>) {
     if (
       !c ||
@@ -88,7 +92,13 @@ function validateSubmission(body: unknown): Submission | string {
     ) {
       return "each comment needs: file (string), side ('old'|'new'), line (integer), body (non-empty string)";
     }
-    comments.push({ file: c.file, side: c.side, line: c.line as number, body: c.body.trim() });
+    comments.push({
+      file: c.file,
+      side: c.side,
+      line: c.line as number,
+      body: c.body.trim(),
+      ...(Number.isInteger(c.thread) && { thread: c.thread as number }),
+    });
   }
   return { verdict: b.verdict as Verdict, summary, comments };
 }
@@ -139,17 +149,67 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
       if (req.method === "GET" && url.pathname === "/") {
         // Hook sessions get the quick allow/review/reject menu first; "Review" links to /review.
         sendHtml(res, request.kind === "hook" ? MENU_FILE : UI_FILE);
-      } else if (req.method === "GET" && url.pathname === "/review") {
+      } else if (req.method === "GET" && (url.pathname === "/review" || url.pathname.startsWith("/round/"))) {
+        // The diff UI is a single-page app; `/round/<n>` is handled client-side
+        // off location.pathname, so every round URL serves the same file.
         sendHtml(res, UI_FILE);
       } else if (req.method === "GET" && url.pathname === "/api/health") {
         json(res, 200, { ok: true, session: id });
       } else if (req.method === "GET" && url.pathname === "/api/session") {
         const r = session.readRequest(id);
-        const patch = session.readPatch(id) ?? "";
+        if (!r) {
+          json(res, 404, { error: "unknown session" });
+          return;
+        }
+        const currentRound = r.round;
+        const history = session.readHistory(id);
+        const currentResult = session.readResult(id);
+        // Every round, newest last, with its verdict (null = current, not yet decided) — the nav list.
+        const rounds = [
+          ...history.map((h) => ({ round: h.round, verdict: h.verdict, summary: h.summary })),
+          { round: currentRound, verdict: currentResult?.verdict ?? null, summary: currentResult?.summary ?? "" },
+        ];
+
+        const roundParam = url.searchParams.get("round");
+        const viewRound = roundParam == null ? currentRound : Number(roundParam);
+        if (!Number.isInteger(viewRound) || viewRound < 1 || viewRound > currentRound) {
+          json(res, 404, { error: `no such round ${roundParam}` });
+          return;
+        }
+
+        // The current round is the live, editable one; earlier rounds are read-only
+        // snapshots served from history/ (the diff, comments and replies as they were).
+        let patch: string;
+        let readOnly = false;
+        let comments: ReviewComment[] = [];
+        let verdict: Verdict | null = null;
+        let summary = "";
+        if (viewRound === currentRound) {
+          patch = session.readPatch(id) ?? "";
+        } else {
+          const hp = session.readHistoryPatch(id, viewRound);
+          const hr = session.readHistoryResult(id, viewRound);
+          if (hp == null || !hr) {
+            json(res, 404, { error: `round ${viewRound} is not available` });
+            return;
+          }
+          patch = hp;
+          readOnly = true;
+          comments = hr.comments;
+          verdict = hr.verdict;
+          summary = hr.summary;
+        }
+
         json(res, 200, {
           request: r,
+          round: viewRound,
+          currentRound,
+          readOnly,
+          rounds,
+          verdict,
+          summary,
+          comments,
           files: parseUnifiedDiff(patch),
-          history: session.readHistory(id),
           threads: session.readThreads(id),
         });
       } else if (req.method === "GET" && url.pathname === "/api/threads") {
@@ -175,6 +235,9 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
         const current = session.readRequest(id) ?? request;
         const now = new Date().toISOString();
         let nextId = threads.reduce((m, t) => Math.max(m, t.id), 0) + 1;
+        // Aligned to `items` order: the thread id each item created or followed up on,
+        // so the UI can link a just-sent comment to its new discussion thread.
+        const created: number[] = [];
         for (const it of items as Array<Record<string, unknown>>) {
           if (!it || typeof it.body !== "string" || it.body.trim() === "") {
             json(res, 400, { error: "each item needs a non-empty body" });
@@ -188,22 +251,25 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
             }
             t.messages.push({ from: "user", body: it.body.trim(), at: now });
             delete t.closed; // a follow-up reopens a closed thread
+            created.push(t.id);
           } else if (typeof it.file === "string" && (it.side === "old" || it.side === "new") && Number.isInteger(it.line)) {
+            const newId = nextId++;
             threads.push({
-              id: nextId++,
+              id: newId,
               file: it.file,
               side: it.side,
               line: it.line as number,
               round: current.round,
               messages: [{ from: "user", body: it.body.trim(), at: now }],
             });
+            created.push(newId);
           } else {
-            json(res, 400, { error: "each item needs either thread (follow-up) or file/side/line (new question)" });
+            json(res, 400, { error: "each item needs either thread (follow-up) or file/side/line (new comment)" });
             return;
           }
         }
         session.writeThreads(id, threads);
-        json(res, 200, { ok: true, threads });
+        json(res, 200, { ok: true, threads, created });
       } else if (req.method === "POST" && url.pathname === "/api/answer") {
         let body: Record<string, unknown>;
         try {
@@ -247,13 +313,8 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           json(res, 409, { error: "a verdict was already submitted for this round" });
           return;
         }
-        const open = session.openQuestions(session.readThreads(id));
-        if (open.length > 0) {
-          json(res, 409, {
-            error: `${open.length} question thread(s) are still waiting on the agent — the verdict unlocks when they are answered or closed`,
-          });
-          return;
-        }
+        // A discussion never blocks the verdict: the user can decide at any time,
+        // whether or not an open discussion is still waiting on the agent.
         let body: unknown;
         try {
           body = JSON.parse(await readBody(req));
@@ -267,11 +328,20 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           return;
         }
         const current = session.readRequest(id) ?? request;
+        // Attach each discussed comment's thread (agent replies + follow-ups) so the
+        // verdict is self-contained — the `thread` id is dropped from the output.
+        const threads = session.readThreads(id);
+        const comments: ReviewComment[] = v.comments.map(({ thread, ...c }) => {
+          const t = thread != null ? threads.find((x) => x.id === thread) : undefined;
+          return t ? { ...c, discussion: t.messages } : c;
+        });
         // Approving a proposal-mode review applies the reviewed bytes to the repo
         // right here, so "approve" deterministically lands exactly what was shown.
         const apply = v.verdict === "approve" ? session.applyProposal(id, current.cwd) : undefined;
         const result: ReviewResult = {
-          ...v,
+          verdict: v.verdict,
+          summary: v.summary,
+          comments,
           session: id,
           round: current.round,
           submittedAt: new Date().toISOString(),

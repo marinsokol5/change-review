@@ -34,7 +34,7 @@ Usage:
   agent-change-reviewer wait <session-id>        keep waiting for a pending review (restarts the UI server if needed)
     --timeout <secs> --open --no-open
   agent-change-reviewer answer <session-id> <answers-file>
-                                    answer the reviewer's question threads, then keep waiting;
+                                    reply to the reviewer's Discuss comments, then keep waiting;
                                     answers-file: [{ "thread": <id>, "answer": "..." }]
   agent-change-reviewer result <session-id>      print the verdict or open questions if any (non-blocking)
   agent-change-reviewer list                     list sessions
@@ -52,7 +52,7 @@ Usage:
                                     stop: end the turn and let the user resume; poll: keep waiting)
 
 Output: verdict JSON on stdout. Exit codes: 0 approve, 2 request_changes, 3 reject, 4 pending,
-5 questions for the agent (answer with \`agent-change-reviewer answer\`), 1 error.`;
+5 discussion — reply to each comment with \`agent-change-reviewer answer\`, 1 error.`;
 
 function fail(msg: string): never {
   console.error(`agent-change-reviewer: ${msg}`);
@@ -84,25 +84,25 @@ function emitOutcome(id: string, outcome: session.Outcome | null): never {
     );
     process.exit(4);
   }
-  if (outcome.kind === "questions") {
-    const questions = outcome.threads.map((t) => ({
+  if (outcome.kind === "discussion") {
+    const comments = outcome.threads.map((t) => ({
       thread: t.id,
       file: t.file,
       side: t.side,
       line: t.line,
-      question: t.messages[t.messages.length - 1].body,
+      comment: t.messages[t.messages.length - 1].body,
       ...(t.messages.length > 1 && { history: t.messages.slice(0, -1) }),
     }));
     console.log(
       JSON.stringify(
         {
-          status: "questions",
+          status: "discussion",
           session: id,
-          questions,
+          comments,
           hint:
-            `The reviewer asked questions instead of a verdict. Answer EVERY thread: write answers.json as ` +
-            `[{ "thread": <id>, "answer": "..." }, ...] and run \`agent-change-reviewer answer ${id} answers.json\` ` +
-            `— it posts your answers and keeps waiting for the verdict.`,
+            `The reviewer opened a discussion instead of deciding. Reply to EVERY comment — what you changed, ` +
+            `or a brief ACK if you agree: write answers.json as [{ "thread": <id>, "answer": "..." }, ...] and run ` +
+            `\`agent-change-reviewer answer ${id} answers.json\` — it posts your replies and keeps waiting for the verdict.`,
         },
         null,
         2,
@@ -237,7 +237,7 @@ function cmdResult(args: string[]): void {
   const result = session.readResult(id);
   if (result) emitOutcome(id, { kind: "verdict", result });
   const open = session.openQuestions(session.readThreads(id));
-  emitOutcome(id, open.length > 0 ? { kind: "questions", threads: open } : null);
+  emitOutcome(id, open.length > 0 ? { kind: "discussion", threads: open } : null);
 }
 
 async function cmdAnswer(args: string[]): Promise<void> {
@@ -310,7 +310,7 @@ function cmdList(): void {
     const status = res
       ? `${res.verdict} (${res.comments.length} comments)`
       : open.length > 0
-        ? `${open.length} question${open.length === 1 ? "" : "s"} for the agent — \`agent-change-reviewer answer ${s.id} …\``
+        ? `${open.length} comment${open.length === 1 ? "" : "s"} to discuss — \`agent-change-reviewer answer ${s.id} …\``
         : live
           ? `pending — http://localhost:${live.port}/`
           : "pending — no server";

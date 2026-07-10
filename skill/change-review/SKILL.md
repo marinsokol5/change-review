@@ -56,7 +56,7 @@ stdout is JSON; the exit code mirrors the verdict:
 | 2 | `request_changes` | address EVERY comment, then re-submit with `--session <id> --replies replies.json` (see below) |
 | 3 | `reject` | discard the changes (worktree mode: `git restore` the touched files), tell the user, ask how to proceed |
 | 4 | pending | follow the JSON `hint`: wait-mode `stop` = end your turn, let the user resume you; `poll` = `agent-change-reviewer wait <session-id>` |
-| 5 | questions | the user asked clarifying questions instead of deciding — answer them (see below) |
+| 5 | discussion | the user opened a discussion instead of deciding — reply to every comment (see below) |
 
 Result shape:
 
@@ -75,6 +75,7 @@ Result shape:
 - `side: "new"` line numbers refer to the proposed version; `side: "old"` refers to removed lines in the original.
 - `summary` may contain instructions even when there are no line comments.
 - An approve can still carry comments — they are advisory; the reviewed content was applied as-is. To act on them, make fresh edits and open a new review.
+- A comment the user discussed with you carries a `discussion` array alongside it (their comment, your reply, any follow-ups).
 
 ## Approve in proposal mode (the `apply` field)
 
@@ -88,24 +89,24 @@ When a proposal-mode review is approved, the CLI deterministically writes the re
 - `applied: false` with `conflicts` — those files changed in the working tree mid-review, so NOTHING was written (all-or-nothing). Rebuild the proposal against the current files and submit a new review round.
 - `applied: false` with `error` — an I/O problem; `wrote` lists what landed before it. Tell the user and resolve before retrying.
 
-## Answering questions (exit 5)
+## Discussion — reply to each comment (exit 5)
 
-Mid-review the user can ask clarifying questions on diff lines ("why was this done?") instead of deciding. The command then exits 5 with the question threads on stdout:
+Instead of deciding, the user can click **Discuss** to send you their line comments and ask you to reply to each. The command then exits 5 with the comments on stdout:
 
 ```json
-{ "status": "questions", "session": "2026-06-11-a1b2c3",
-  "questions": [ { "thread": 1, "file": "src/auth.py", "side": "new", "line": 42,
-                   "question": "why not reuse the retry helper?" } ] }
+{ "status": "discussion", "session": "2026-06-11-a1b2c3",
+  "comments": [ { "thread": 1, "file": "src/auth.py", "side": "new", "line": 42,
+                  "comment": "why not reuse the retry helper?" } ] }
 ```
 
-Answer **every** thread, honestly and concretely, then keep waiting — the verdict stays locked for the user until all questions are answered:
+Reply to **every** comment, honestly and concretely — a brief ACK is fine when you simply agree — then keep waiting for the verdict. A discussion does NOT block the user's decision (they can approve/reject at any time); you reply in the same review revision without changing any files, and they read your replies before deciding:
 
 ```bash
 # answers.json: [{ "thread": 1, "answer": "the helper retries on 5xx only; this path needs 429 backoff" }]
 agent-change-reviewer answer <session-id> answers.json
 ```
 
-`agent-change-reviewer answer` posts the answers and then blocks like `agent-change-reviewer wait` (same timeout/pending rules). Follow-up questions arrive as another exit 5 with the thread's history attached. Do NOT change files while answering — questions are conversation, not change requests; wait for the verdict.
+`agent-change-reviewer answer` posts your replies (keyed by each comment's `thread` id) and then blocks like `agent-change-reviewer wait` (same timeout/pending rules). If the user discusses more comments, you'll get another exit 5 the same way. Do NOT change files while discussing — a discussion is conversation, not a change request; wait for the verdict.
 
 ## Re-submitting after request_changes (exit 2)
 

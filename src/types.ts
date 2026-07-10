@@ -34,6 +34,8 @@ export interface ReviewComment {
   body: string;
   /** The agent's response, attached when the next round is submitted with --replies. */
   reply?: string;
+  /** Present when this comment was sent via "Discuss": the agent's reply plus any follow-ups. */
+  discussion?: ThreadMessage[];
 }
 
 export interface CommentReply {

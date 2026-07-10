@@ -32,7 +32,7 @@ Restart your agent session afterwards so it picks the instructions up.
 ## How a review flows
 
 1. The agent runs `agent-change-reviewer review --worktree --title "Add retry logic"` (or `--proposal <dir>` to review changes *before* they're written, or passes any unified diff). The command blocks.
-2. Your browser opens an inline diff. Hover a line, click `+`, leave comments. Pick **Approve**, **Request changes**, or **Reject**, optionally with an overall summary.
+2. Your browser opens an inline diff. Hover a line, click `+`, leave comments. Then pick one of four actions — **Approve**, **Request changes**, **Reject**, or **Discuss** (send your comments to the agent for a reply before you decide) — optionally with an overall summary.
 3. The verdict JSON lands on the agent's stdout:
 
 ```json
@@ -47,10 +47,10 @@ Restart your agent session afterwards so it picks the instructions up.
 }
 ```
 
-4. Not sure about a change? Mark a comment as a **question** and send it mid-review — the agent answers in place (threaded under your question, exit 5 → `agent-change-reviewer answer`), follow-ups reopen the thread, and the verdict stays locked until every question is answered or withdrawn.
-5. On `request_changes` the agent fixes every comment and re-submits with `--session <id> --replies replies.json` — round 2 shows each of your comments with the agent's reply threaded under it ("fixed — …" or why it deliberately didn't). One reply per comment, enforced by the CLI.
+4. Want the agent's take before deciding? Leave your comments, then click **Discuss** — it sends every comment to the agent for a reply-per-comment (a bare ACK when it agrees, exit 5 → `agent-change-reviewer answer`) in the same review revision, without touching any files. The replies thread inline; you can still decide at any time (a discussion never blocks the verdict). Your comments ride along with the eventual verdict, now with the discussion attached.
+5. On `request_changes` the agent fixes every comment and re-submits with `--session <id> --replies replies.json` — round 2 shows each of your comments with the agent's reply threaded under it ("fixed — …" or why it deliberately didn't). One reply per comment, enforced by the CLI. Earlier rounds stay browsable — round pills in the header link to `/round/N`, a read-only snapshot of that round's diff with your comments, the agent's replies, and any discussion in place.
 
-Exit codes: `0` approve · `2` request_changes · `3` reject · `4` pending (no verdict yet) · `5` questions for the agent · `1` error.
+Exit codes: `0` approve · `2` request_changes · `3` reject · `4` pending (no verdict yet) · `5` discussion (reply to each comment) · `1` error.
 
 ## Commands
 
@@ -60,8 +60,8 @@ Exit codes: `0` approve · `2` request_changes · `3` reject · `4` pending (no 
 | `agent-change-reviewer review --worktree [--base REF]` | review uncommitted changes (`git diff`); `git add -N` untracked files first |
 | `agent-change-reviewer review --proposal <dir>` | review a dir of proposed file contents (repo-relative paths) diffed against the working tree; on approve the CLI writes the reviewed bytes into the repo itself (all-or-nothing, reported under `apply` in the verdict JSON) |
 | `agent-change-reviewer wait <id>` | keep waiting on a pending review; restarts the UI server if it died |
-| `agent-change-reviewer answer <id> <answers.json>` | answer the reviewer's question threads, then keep waiting for the verdict |
-| `agent-change-reviewer result <id>` | print the verdict or open questions if any (non-blocking) |
+| `agent-change-reviewer answer <id> <answers.json>` | reply to the reviewer's Discuss comments, then keep waiting for the verdict |
+| `agent-change-reviewer result <id>` | print the verdict or open discussion if any (non-blocking) |
 | `agent-change-reviewer list` | list sessions and their status |
 | `agent-change-reviewer serve <id>` | run the UI server in the foreground (debugging) |
 | `agent-change-reviewer install claude\|codex` | install the change-review skill for that agent (re-run after upgrading); claude: also allowlists the `/tmp/change-review/` proposal staging dir in `~/.claude/settings.json` |
