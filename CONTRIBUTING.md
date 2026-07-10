@@ -5,16 +5,16 @@ The development guide — setup, repo layout, architecture, invariants, how to t
 ## TL;DR
 
 ```bash
-npm install && npm link   # build + put `agent-change-reviewer` on PATH
-npm run demo              # see it work
-npm run dev               # tsc --watch while you hack
+npm install     # dev deps only (TypeScript, for type-checking — nothing is built)
+npm run demo    # see it work: node runs reviewer.ts directly (Node >= 22.18)
+npm run check   # tsc --noEmit before you push
 ```
 
 ## What to work on
 
-[ROADMAP.md](ROADMAP.md) is prioritized top-to-bottom from real usage. The headline item is the Claude Code `PreToolUse` hook; the most welcome small contribution is unit tests for `src/patch.ts`.
+[ROADMAP.md](ROADMAP.md) is prioritized top-to-bottom from real usage. The most welcome small contribution is unit tests for `src/patch.ts`.
 
 ## Ground rules
 
-- Keep the runtime dependency count at zero and the UI a single self-contained HTML file — these are deliberate constraints, not accidents (see the invariants section in [AGENTS.md](AGENTS.md)).
-- If you change CLI flags, the verdict JSON, or exit codes, update the contract docs in the same change: `skill/change-review/SKILL.md` and the README (then re-run `agent-change-reviewer install claude|codex`).
+- Keep the runtime dependency count at zero, the UI a single self-contained HTML file, and the sources runnable by plain `node` (erasable TypeScript only, no build step) — these are deliberate constraints, not accidents (see the invariants section in [AGENTS.md](AGENTS.md)).
+- If you change CLI flags, the verdict JSON, or exit codes, update the contract docs in the same change: root `SKILL.md` and the README.

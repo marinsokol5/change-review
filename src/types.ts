@@ -74,9 +74,6 @@ export interface AnswerInput {
 
 export type Verdict = "approve" | "request_changes" | "reject";
 
-/** Quick-menu actions on hook sessions; absent when the verdict came from the full review UI. */
-export type MenuDecision = "accept" | "accept_session" | "reject";
-
 /** Outcome of the CLI deterministically applying an approved proposal to the repo. */
 export interface ApplyOutcome {
   /** true: every proposed file now has exactly its reviewed contents. */
@@ -124,7 +121,6 @@ export interface ReviewResult {
   session: string;
   round: number;
   submittedAt: string;
-  decision?: MenuDecision;
   /** Present on approved proposal-mode reviews: how the deterministic apply went. */
   apply?: ApplyOutcome;
   /** Present when the reviewer approved a per-chunk selection: what was applied vs skipped. */
@@ -138,9 +134,6 @@ export interface SessionRequest {
   round: number;
   createdAt: string;
   updatedAt: string;
-  /** "hook" sessions serve the quick allow/review/reject menu at "/" instead of the diff UI. */
-  kind?: "review" | "hook";
-  meta?: { tool: string; file: string };
 }
 
 export interface ServerInfo {

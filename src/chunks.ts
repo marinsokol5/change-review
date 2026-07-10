@@ -1,4 +1,4 @@
-import type { DiffLine, FileDiff, FileStatus, Hunk, SkippedChunk } from "./types.js";
+import type { DiffLine, FileDiff, FileStatus, Hunk, SkippedChunk } from "./types.ts";
 
 /**
  * A "chunk" is the unit the review UI lets the user apply or skip: one contiguous

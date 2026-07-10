@@ -8,14 +8,13 @@ import {
   serializePatch,
   totalChunks,
   validateChunkRefs,
-} from "./chunks.js";
-import { interdiffFiles } from "./interdiff.js";
-import { parseUnifiedDiff } from "./patch.js";
-import * as session from "./session.js";
-import type { ChunksOutcome, MenuDecision, ReviewComment, ReviewResult, Verdict } from "./types.js";
+} from "./chunks.ts";
+import { interdiffFiles } from "./interdiff.ts";
+import { parseUnifiedDiff } from "./patch.ts";
+import * as session from "./session.ts";
+import type { ChunksOutcome, ReviewComment, ReviewResult, Verdict } from "./types.ts";
 
 const UI_FILE = fileURLToPath(new URL("../ui/index.html", import.meta.url));
-const MENU_FILE = fileURLToPath(new URL("../ui/menu.html", import.meta.url));
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
@@ -141,9 +140,9 @@ function listenWithFallback(server: http.Server, preferred: number): Promise<num
 
 export async function runServe(id: string, portArg?: number): Promise<void> {
   const request = session.readRequest(id);
-  if (!request) throw new Error(`unknown session "${id}"`);
+  if (!request) throw new Error(`unknown session "${id}" in ${session.dataDir()}`);
   if (session.readResult(id)) {
-    console.error(`agent-change-reviewer: session ${id} already has a verdict for round ${request.round}`);
+    console.error(`change-review: session ${id} already has a verdict for round ${request.round}`);
     return;
   }
 
@@ -167,8 +166,7 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
       if (rejectNonLocal(req, res)) return;
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method === "GET" && url.pathname === "/") {
-        // Hook sessions get the quick allow/review/reject menu first; "Review" links to /review.
-        sendHtml(res, request.kind === "hook" ? MENU_FILE : UI_FILE);
+        sendHtml(res, UI_FILE);
       } else if (req.method === "GET" && (url.pathname === "/review" || url.pathname.startsWith("/round/"))) {
         // The diff UI is a single-page app; `/round/<n>` is handled client-side
         // off location.pathname, so every round URL serves the same file.
@@ -386,10 +384,6 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
         let chunks: ChunksOutcome | undefined;
         let partial: Parameters<typeof session.applyProposal>[2];
         if (v.skipped) {
-          if (current.kind === "hook") {
-            json(res, 400, { error: "hook sessions are all-or-nothing — no chunk selection" });
-            return;
-          }
           const files = parseUnifiedDiff(session.readPatch(id) ?? "");
           const validated = validateChunkRefs(files, v.skipped);
           if (typeof validated === "string") {
@@ -433,43 +427,6 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
         session.writeResult(id, result);
         json(res, 200, { ok: true, ...(apply && { apply }), ...(chunks && { chunks }) });
         finishAfterVerdict();
-      } else if (req.method === "POST" && url.pathname === "/api/decision") {
-        // Quick-menu decisions on hook sessions; "review" is not posted — the menu navigates to /review.
-        if (session.readResult(id)) {
-          json(res, 409, { error: "a verdict was already submitted for this round" });
-          return;
-        }
-        let body: Record<string, unknown>;
-        try {
-          body = JSON.parse(await readBody(req)) as Record<string, unknown>;
-        } catch {
-          json(res, 400, { error: "invalid JSON body" });
-          return;
-        }
-        const action = body.action as MenuDecision;
-        if (action !== "accept" && action !== "accept_session" && action !== "reject") {
-          json(res, 400, { error: "action must be one of: accept, accept_session, reject" });
-          return;
-        }
-        const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-        const current = session.readRequest(id) ?? request;
-        const result: ReviewResult = {
-          verdict: action === "reject" ? "reject" : "approve",
-          summary:
-            action === "reject"
-              ? reason
-              : action === "accept_session"
-                ? "Accepted — and auto-allow the rest of this agent session."
-                : "Accepted from the quick menu.",
-          comments: [],
-          session: id,
-          round: current.round,
-          submittedAt: new Date().toISOString(),
-          decision: action,
-        };
-        session.writeResult(id, result);
-        json(res, 200, { ok: true });
-        finishAfterVerdict();
       } else if (url.pathname === "/favicon.ico") {
         res.writeHead(204);
         res.end();
@@ -488,7 +445,7 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
   const preferred = portArg ?? session.readServerInfo(id)?.port ?? 0;
   const port = await listenWithFallback(server, preferred);
   session.writeServerInfo(id, { pid: process.pid, port, startedAt: new Date().toISOString() });
-  console.error(`agent-change-reviewer: serving session ${id} at http://localhost:${port}/`);
+  console.error(`change-review: serving session ${id} at http://localhost:${port}/`);
 
   const cleanup = () => {
     session.clearServerInfo(id);

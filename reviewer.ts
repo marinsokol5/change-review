@@ -1,24 +1,32 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import * as config from "./config.js";
-import * as hook from "./hook.js";
-import { openBrowser } from "./open.js";
-import { buildProposalPatch } from "./proposal.js";
-import { runServe } from "./server.js";
-import * as session from "./session.js";
-import type { CommentReply } from "./types.js";
+import * as config from "./src/config.ts";
+import { openBrowser } from "./src/open.ts";
+import { buildProposalPatch } from "./src/proposal.ts";
+import { runServe } from "./src/server.ts";
+import * as session from "./src/session.ts";
+import type { CommentReply } from "./src/types.ts";
 
-const PKG_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const SELF = fileURLToPath(import.meta.url);
 
-const USAGE = `agent-change-reviewer — human review of agent-proposed changes
+/** Quote a value for inclusion in a copy-pasteable shell command. */
+const shq = (s: string) => (/[^\w@%+=:,./-]/.test(s) ? `'${s.replaceAll("'", `'\\''`)}'` : s);
+/** The exact command an agent should run for `rest`, with the script path and data dir spelled out. */
+const cli = (rest: string) => `node ${shq(SELF)} ${rest} --dir ${shq(session.dataDir())}`;
+
+const USAGE = `change-review — human review of agent-proposed changes
+
+Runs directly under Node >= 22.18 (native TypeScript type stripping) — no build, no install.
+
+Every command accepts --dir <path>: the directory sessions live in (default:
+<os-tmpdir>/change-review). Use the same --dir for every command of one review.
 
 Usage:
-  agent-change-reviewer review [patch-file]      review a unified diff (file, stdin, or "-")
+  node reviewer.ts review [patch-file]           review a unified diff (file, stdin, or "-")
     --worktree                      review uncommitted changes (git diff <base>)
     --base <ref>                    base for --worktree (default: HEAD)
     --proposal <dir>                review a proposal dir mirroring repo-relative paths;
@@ -31,36 +39,28 @@ Usage:
     --timeout <secs>                max seconds to wait for a verdict (default 480, 0 = forever)
     --port <port>                   fixed port for the review server
     --no-open                       don't open the browser
-  agent-change-reviewer wait <session-id>        keep waiting for a pending review (restarts the UI server if needed)
+  node reviewer.ts wait <session-id>             keep waiting for a pending review (restarts the UI server if needed)
     --timeout <secs> --open --no-open
-  agent-change-reviewer answer <session-id> <answers-file>
+  node reviewer.ts answer <session-id> <answers-file>
                                     reply to the reviewer's Discuss comments, then keep waiting;
                                     answers-file: [{ "thread": <id>, "answer": "..." }]
-  agent-change-reviewer result <session-id>      print the verdict or open questions if any (non-blocking)
-  agent-change-reviewer list                     list sessions
-  agent-change-reviewer serve <session-id>       run the UI server in the foreground (debugging)
-  agent-change-reviewer install claude|codex     install the change-review skill to ~/.claude/skills or ~/.codex/skills
-                                    (claude: also allowlists proposal staging under /tmp/change-review
-                                    in ~/.claude/settings.json so review staging never prompts)
-  agent-change-reviewer hook install claude|codex    register the PreToolUse hook (~/.claude/settings.json or ~/.codex/hooks.json)
-  agent-change-reviewer hook uninstall claude|codex  remove it again
-  agent-change-reviewer hook on|off|status       review mode: intercept the agent's file edits (Claude Code Edit/Write,
-                                    Codex apply_patch) with an allow / allow-session / review / reject menu
-  agent-change-reviewer hook-run                 (internal) the hook entry point agents invoke
-  agent-change-reviewer config [key] [value]     get or set config; keys:
+  node reviewer.ts result <session-id>           print the verdict or open questions if any (non-blocking)
+  node reviewer.ts list                          list sessions
+  node reviewer.ts serve <session-id>            run the UI server in the foreground (debugging)
+  node reviewer.ts config [key] [value]          get or set config (~/.change-review/config.json); keys:
     wait-mode poll|stop             what agents do when a review outlives the CLI timeout (default
                                     stop: end the turn and let the user resume; poll: keep waiting)
 
 Output: verdict JSON on stdout. Exit codes: 0 approve, 2 request_changes, 3 reject, 4 pending,
-5 discussion — reply to each comment with \`agent-change-reviewer answer\`, 1 error.`;
+5 discussion — reply to each comment with the answer command, 1 error.`;
 
 function fail(msg: string): never {
-  console.error(`agent-change-reviewer: ${msg}`);
+  console.error(`change-review: ${msg}`);
   process.exit(1);
 }
 
 function info(msg: string): void {
-  console.error(`agent-change-reviewer: ${msg}`);
+  console.error(`change-review: ${msg}`);
 }
 
 async function readStdin(): Promise<string> {
@@ -76,11 +76,15 @@ function emitOutcome(id: string, outcome: session.Outcome | null): never {
     const waitMode = config.readConfig().waitMode;
     const hint =
       waitMode === "poll"
-        ? `No verdict yet. Run \`agent-change-reviewer wait ${id}\` (with a long timeout) to keep waiting.`
+        ? `No verdict yet. Run \`${cli(`wait ${id}`)}\` (with a long timeout) to keep waiting.`
         : `No verdict yet — STOP, do not poll. End your turn and tell the user the review is open${url ? ` at ${url}` : ""}; ` +
-          `when they say they have submitted a verdict (or asked questions), run \`agent-change-reviewer result ${id}\` to pick it up.`;
+          `when they say they have submitted a verdict (or asked questions), run \`${cli(`result ${id}`)}\` to pick it up.`;
     console.log(
-      JSON.stringify({ status: "pending", session: id, waitMode, ...(url && { url }), hint }, null, 2),
+      JSON.stringify(
+        { status: "pending", session: id, dir: session.dataDir(), waitMode, ...(url && { url }), hint },
+        null,
+        2,
+      ),
     );
     process.exit(4);
   }
@@ -98,11 +102,12 @@ function emitOutcome(id: string, outcome: session.Outcome | null): never {
         {
           status: "discussion",
           session: id,
+          dir: session.dataDir(),
           comments,
           hint:
             `The reviewer opened a discussion instead of deciding. Reply to EVERY comment — what you changed, ` +
             `or a brief ACK if you agree: write answers.json as [{ "thread": <id>, "answer": "..." }, ...] and run ` +
-            `\`agent-change-reviewer answer ${id} answers.json\` — it posts your replies and keeps waiting for the verdict.`,
+            `\`${cli(`answer ${id} answers.json`)}\` — it posts your replies and keeps waiting for the verdict.`,
         },
         null,
         2,
@@ -171,7 +176,7 @@ async function cmdReview(args: string[]): Promise<void> {
   let replies: CommentReply[] | undefined;
   if (values.replies) {
     if (!values.session) fail("--replies requires --session — replies answer the previous round's comments");
-    if (!session.readRequest(values.session)) fail(`unknown session "${values.session}"`);
+    if (!session.readRequest(values.session)) fail(`unknown session "${values.session}" in ${session.dataDir()}`);
     const prev = session.readResult(values.session);
     if (!prev) fail(`session ${values.session} has no submitted verdict to reply to`);
     let raw: unknown;
@@ -215,8 +220,8 @@ async function cmdWait(args: string[]): Promise<void> {
     allowPositionals: true,
   });
   const id = positionals[0];
-  if (!id) fail("usage: agent-change-reviewer wait <session-id>");
-  if (!session.readRequest(id)) fail(`unknown session "${id}"`);
+  if (!id) fail("usage: node reviewer.ts wait <session-id>");
+  if (!session.readRequest(id)) fail(`unknown session "${id}" in ${session.dataDir()}`);
 
   const existing = session.readResult(id);
   if (existing) emitOutcome(id, { kind: "verdict", result: existing });
@@ -232,8 +237,8 @@ async function cmdWait(args: string[]): Promise<void> {
 
 function cmdResult(args: string[]): void {
   const id = args[0];
-  if (!id) fail("usage: agent-change-reviewer result <session-id>");
-  if (!session.readRequest(id)) fail(`unknown session "${id}"`);
+  if (!id) fail("usage: node reviewer.ts result <session-id>");
+  if (!session.readRequest(id)) fail(`unknown session "${id}" in ${session.dataDir()}`);
   const result = session.readResult(id);
   if (result) emitOutcome(id, { kind: "verdict", result });
   const open = session.openQuestions(session.readThreads(id));
@@ -252,8 +257,8 @@ async function cmdAnswer(args: string[]): Promise<void> {
     allowPositionals: true,
   });
   const [id, file] = positionals;
-  if (!id || !file) fail("usage: agent-change-reviewer answer <session-id> <answers-file>");
-  if (!session.readRequest(id)) fail(`unknown session "${id}"`);
+  if (!id || !file) fail("usage: node reviewer.ts answer <session-id> <answers-file>");
+  if (!session.readRequest(id)) fail(`unknown session "${id}" in ${session.dataDir()}`);
 
   const existing = session.readResult(id);
   if (existing) emitOutcome(id, { kind: "verdict", result: existing });
@@ -293,14 +298,14 @@ async function cmdServe(args: string[]): Promise<void> {
     allowPositionals: true,
   });
   const id = positionals[0];
-  if (!id) fail("usage: agent-change-reviewer serve <session-id>");
+  if (!id) fail("usage: node reviewer.ts serve <session-id>");
   await runServe(id, values.port ? Number(values.port) : undefined);
 }
 
 function cmdList(): void {
   const sessions = session.listSessions();
   if (sessions.length === 0) {
-    info("no sessions");
+    info(`no sessions in ${session.dataDir()}`);
     return;
   }
   for (const s of sessions) {
@@ -310,7 +315,7 @@ function cmdList(): void {
     const status = res
       ? `${res.verdict} (${res.comments.length} comments)`
       : open.length > 0
-        ? `${open.length} comment${open.length === 1 ? "" : "s"} to discuss — \`agent-change-reviewer answer ${s.id} …\``
+        ? `${open.length} comment${open.length === 1 ? "" : "s"} to discuss — reply via \`answer ${s.id} …\``
         : live
           ? `pending — http://localhost:${live.port}/`
           : "pending — no server";
@@ -322,7 +327,7 @@ function cmdConfig(args: string[]): void {
   const [key, value] = args;
   const cfg = config.readConfig();
   if (!key) {
-    console.log(JSON.stringify({ "wait-mode": cfg.waitMode, "review-prefix": cfg.reviewPrefix ?? null }, null, 2));
+    console.log(JSON.stringify({ "wait-mode": cfg.waitMode }, null, 2));
     return;
   }
   if (key === "wait-mode") {
@@ -332,103 +337,31 @@ function cmdConfig(args: string[]): void {
     console.log(`wait-mode = ${value}`);
     return;
   }
-  if (key === "review-prefix") {
-    if (value === undefined) { console.log(cfg.reviewPrefix ?? "(not set)"); return; }
-    const prefix = value === "" ? undefined : value;
-    config.writeConfig({ ...cfg, reviewPrefix: prefix });
-    console.log(prefix ? `review-prefix = ${prefix}` : "review-prefix cleared");
-    return;
-  }
-  fail(`unknown config key "${key}" (known keys: wait-mode, review-prefix)`);
+  fail(`unknown config key "${key}" (known keys: wait-mode)`);
 }
 
-function hookTarget(raw: string | undefined): hook.HookTarget {
-  if (raw !== "claude" && raw !== "codex") fail("usage: agent-change-reviewer hook install|uninstall <claude|codex>");
-  return raw;
-}
-
-function cmdHook(args: string[]): void {
-  const sub = args[0];
-  const cfg = config.readConfig();
-  switch (sub) {
-    case "install": {
-      const target = hookTarget(args[1]);
-      console.log(hook.installHook(target));
-      console.log(
-        target === "claude"
-          ? "Restart Claude Code (or run /hooks) so it picks the hook up, then arm it with `agent-change-reviewer hook on`."
-          : "Restart Codex so it picks the hook up, then arm it with `agent-change-reviewer hook on`.",
-      );
-      return;
+/** Pull the global --dir option out of the argv so per-command parseArgs never sees it. */
+function extractDir(argv: string[]): { args: string[]; dir?: string } {
+  const args: string[] = [];
+  let dir: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--dir") {
+      dir = argv[++i];
+      if (dir === undefined) fail("--dir needs a path");
+    } else if (a.startsWith("--dir=")) {
+      dir = a.slice("--dir=".length);
+    } else {
+      args.push(a);
     }
-    case "uninstall":
-      console.log(hook.uninstallHook(hookTarget(args[1])));
-      return;
-    case "on":
-      config.writeConfig({ ...cfg, hookEnabled: true });
-      console.log("review mode ON — agent file edits now open the review menu in your browser");
-      if (!hook.isHookInstalled("claude") && !hook.isHookInstalled("codex")) {
-        console.log("note: no hook is registered yet — run `agent-change-reviewer hook install claude` (and/or codex) first.");
-      }
-      return;
-    case "off": {
-      config.writeConfig({ ...cfg, hookEnabled: false });
-      const n = hook.clearAlwaysFlags();
-      console.log(`review mode OFF${n ? ` (cleared ${n} session allow-flag${n === 1 ? "" : "s"})` : ""}`);
-      return;
-    }
-    case "status":
-      console.log(`claude hook installed: ${hook.isHookInstalled("claude") ? "yes" : "no (agent-change-reviewer hook install claude)"}`);
-      console.log(`codex hook installed:  ${hook.isHookInstalled("codex") ? "yes" : "no (agent-change-reviewer hook install codex)"}`);
-      console.log(`review mode: ${cfg.hookEnabled ? "on" : "off"}`);
-      if (cfg.reviewPrefix) console.log(`review prefix: "${cfg.reviewPrefix}"`);
-      return;
-    default:
-      fail("usage: agent-change-reviewer hook <install|uninstall|on|off|status>");
   }
-}
-
-/** Where SKILL.md tells agents to stage proposal-mode files — keep the two in sync. */
-const PROPOSAL_STAGING_DIR = "/tmp/change-review";
-// "//" is Claude Code's absolute-path permission syntax; the /private twin covers
-// macOS canonicalizing the /tmp symlink before rules are matched.
-const PROPOSAL_ALLOW_RULES = ["Read", "Edit", "Write"].flatMap((tool) => [
-  `${tool}(/${PROPOSAL_STAGING_DIR}/**)`,
-  `${tool}(//private${PROPOSAL_STAGING_DIR}/**)`,
-]);
-
-/** Pre-approve agent file writes under the proposal staging dir so review staging never prompts. */
-function allowProposalDir(): void {
-  const file = path.join(os.homedir(), ".claude", "settings.json");
-  const settings = hook.readJsonSettings(file);
-  const permissions = (settings.permissions ??= {}) as { allow?: string[] };
-  const allow = (permissions.allow ??= []);
-  const missing = PROPOSAL_ALLOW_RULES.filter((rule) => !allow.includes(rule));
-  if (missing.length === 0) {
-    console.log(`Proposal staging dir ${PROPOSAL_STAGING_DIR}/ is already allowlisted in ${file}`);
-    return;
-  }
-  allow.push(...missing);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
-  console.log(`Allowlisted agent file writes under ${PROPOSAL_STAGING_DIR}/ in ${file}`);
-}
-
-function cmdInstall(args: string[]): void {
-  const target = args[0];
-  if (target !== "claude" && target !== "codex") fail("usage: agent-change-reviewer install <claude|codex>");
-  const src = path.join(PKG_ROOT, "skill", "change-review");
-  const dest = path.join(os.homedir(), target === "claude" ? ".claude" : ".codex", "skills", "change-review");
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.cpSync(src, dest, { recursive: true });
-  console.log(`Installed skill to ${dest}`);
-  if (target === "claude") allowProposalDir();
-  else console.log(`(Codex's workspace-write sandbox already allows ${PROPOSAL_STAGING_DIR}/ — nothing to allowlist.)`);
-  console.log(`Restart your ${target === "claude" ? "Claude Code" : "Codex"} session so it picks up the new skill.`);
+  return { args, dir };
 }
 
 async function main(): Promise<void> {
-  const [cmd, ...rest] = process.argv.slice(2);
+  const { args, dir } = extractDir(process.argv.slice(2));
+  if (dir) session.setDataDir(path.resolve(dir));
+  const [cmd, ...rest] = args;
   switch (cmd) {
     case "review":
       return cmdReview(rest);
@@ -442,12 +375,6 @@ async function main(): Promise<void> {
       return cmdServe(rest);
     case "list":
       return cmdList();
-    case "install":
-      return cmdInstall(rest);
-    case "hook":
-      return cmdHook(rest);
-    case "hook-run":
-      return hook.runHook();
     case "config":
       return cmdConfig(rest);
     case undefined:

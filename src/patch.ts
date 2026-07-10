@@ -1,4 +1,4 @@
-import type { FileDiff, Hunk } from "./types.js";
+import type { FileDiff, Hunk } from "./types.ts";
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 

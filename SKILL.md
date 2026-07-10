@@ -3,48 +3,57 @@ name: change-review
 description: Open an interactive human review of proposed file changes. The user sees an inline diff in their browser, leaves line comments, and returns a verdict (approve / request_changes / reject) printed as JSON on stdout. Use before applying substantive or risky changes, whenever the user asks to review a change ("let me review", "show me the diff", "open a review"), or to re-review after addressing feedback.
 ---
 
-# Human change review (`agent-change-reviewer`)
+# Human change review (`reviewer.ts`)
 
-`agent-change-reviewer` opens an inline diff in the user's browser. The user comments on specific lines and picks a verdict; the command blocks until then and prints the verdict JSON to stdout.
+This skill ships its own zero-dependency CLI: `reviewer.ts`, in this skill's folder (the folder containing this SKILL.md). It opens an inline diff in the user's browser; the user comments on specific lines and picks a verdict; the command blocks until then and prints the verdict JSON to stdout.
 
-Run it from the repo root. Never run it in the background — the blocking call IS the review. ALWAYS run `agent-change-reviewer` commands with the command sandbox disabled: it binds localhost and writes `~/.agent-change-reviewer/`, both of which sandboxes block (EPERM).
+In the commands below:
+
+- **`$REVIEWER`** = the absolute path to `reviewer.ts` in this skill's folder.
+- **`$DIR`** = the session data directory — a temp directory **you choose**, e.g. `<your scratchpad or $TMPDIR>/change-review`.
+
+Ground rules:
+
+- Requires Node >= 22.18 — the CLI is TypeScript that `node` runs directly via type stripping. No build, no npm install.
+- Pick `$DIR` **once per review session** and pass `--dir "$DIR"` to EVERY command of that review — later rounds, `wait`, `answer`, `result` included. All session state lives under it; a different `--dir` simply won't find the session. Every JSON the CLI prints echoes the dir and the exact next command, so follow those verbatim.
+- Run it from the repo root. Never run it in the background — the blocking call IS the review. ALWAYS run it with the command sandbox disabled: it binds localhost, which sandboxes block (`listen EPERM`).
 
 ## Invoking — pick one mode
 
 **Worktree mode (preferred in a git repo).** Apply your changes to the working tree first, then:
 
 ```bash
-agent-change-reviewer review --worktree --base HEAD --title "Short description of the change"
+node "$REVIEWER" review --worktree --base HEAD --title "Short description of the change" --dir "$DIR"
 ```
 
 Untracked new files don't show up in `git diff` — run `git add -N <file>` on them first. If the review is rejected, revert with `git restore` (and delete the new files).
 
-**Proposal mode (review BEFORE writing into the repo).** Write each proposed file's *complete new contents* into a fresh subdirectory of `/tmp/change-review/` that mirrors repo-relative paths; the diff is taken against the current working tree automatically:
+**Proposal mode (review BEFORE writing into the repo).** Write each proposed file's *complete new contents* into a fresh staging directory that mirrors repo-relative paths — use a subdirectory of `$DIR`, one per round, so everything about the review lives in one place. The diff is taken against the current working tree automatically:
 
 ```bash
-# stage the proposal in /tmp/change-review/<unique-dir>/ — e.g. the new version
-# of src/auth.py goes to /tmp/change-review/myrepo-x7k2/src/auth.py
-agent-change-reviewer review --proposal /tmp/change-review/myrepo-x7k2 --title "Short description"
+# stage the proposal in $DIR/proposal-r1/ — e.g. the new version
+# of src/auth.py goes to $DIR/proposal-r1/src/auth.py
+node "$REVIEWER" review --proposal "$DIR/proposal-r1" --title "Short description" --dir "$DIR"
 ```
 
-Stage under exactly `/tmp/change-review/` — `agent-change-reviewer install` pre-approved file-tool writes there, so staging never triggers a permission prompt (any other temp dir will). Write the files with your file-write tool, which creates parent directories itself; don't shell out to `mkdir`/`cp` (the command sandbox may block `/tmp`). Pick a fresh, unique subdirectory per proposal and never reuse one — leftover files from an earlier proposal would leak into the diff.
+Write the staged files with your file-write tool (it creates parent directories itself). Use a fresh directory per proposal and never reuse one — leftover files from an earlier proposal would leak into the diff. The CLI snapshots the staged bytes the moment the review opens, so the staging directory doesn't need to survive afterwards.
 
 New files are fine (they diff against nothing). File deletions can't be expressed in this mode — use worktree mode for those.
 
 On approve, the CLI itself writes the reviewed files into the repo, byte-for-byte what the user saw — filtered down to the chunks the user selected if they approved only a subset — do NOT re-write them yourself. The verdict JSON's `apply` field tells you how it went (see "Approve in proposal mode" below), and `chunks` describes a partial selection (see "Partial approve").
 
-**Patch mode.** If you already have a unified diff: `agent-change-reviewer review changes.patch`, or pipe it on stdin.
+**Patch mode.** If you already have a unified diff: `node "$REVIEWER" review changes.patch --dir "$DIR"`, or pipe it on stdin.
 
 ## Timeouts and pending reviews — important
 
-Humans are slow. Always run `agent-change-reviewer` with the maximum Bash timeout (600000 ms). The CLI itself waits 480 s by default and then exits with code 4 ("pending") while the review UI stays open in the user's browser.
+Humans are slow. Always run the review commands with the maximum Bash timeout (600000 ms). The CLI itself waits 480 s by default and then exits with code 4 ("pending") while the review UI stays open in the user's browser.
 
-Exit code 4 is not a failure and not permission to abandon the review. The pending JSON's `hint` tells you what to do, based on the user's configured `wait-mode` (`agent-change-reviewer config wait-mode`):
+Exit code 4 is not a failure and not permission to abandon the review. The pending JSON's `hint` tells you what to do, based on the user's configured `wait-mode` (`node "$REVIEWER" config wait-mode`):
 
-- **`stop` (the default):** end your turn. Tell the user the review is open (use the `url` from the pending JSON) and ask them to tell you when they've submitted a verdict; then run `agent-change-reviewer result <session-id>` to pick it up and act on it. Do NOT re-run `agent-change-reviewer wait` in a loop — the user chose this mode to avoid idle polling turns.
-- **`poll`:** run `agent-change-reviewer wait <session-id>` (again with max Bash timeout), repeatedly if needed, until you get a real verdict.
+- **`stop` (the default):** end your turn. Tell the user the review is open (use the `url` from the pending JSON) and ask them to tell you when they've submitted a verdict; then run `node "$REVIEWER" result <session-id> --dir "$DIR"` to pick it up and act on it. Do NOT re-run `wait` in a loop — the user chose this mode to avoid idle polling turns.
+- **`poll`:** run `node "$REVIEWER" wait <session-id> --dir "$DIR"` (again with max Bash timeout), repeatedly if needed, until you get a real verdict.
 
-The session id is in the pending JSON and on stderr.
+The session id is in the pending JSON and on stderr; the JSON's `dir` field is the `--dir` to keep using.
 
 ## Handling the outcome
 
@@ -55,7 +64,7 @@ stdout is JSON; the exit code mirrors the verdict:
 | 0 | `approve` | worktree/patch mode: keep the changes and continue; proposal mode: the CLI already applied them — check `apply` (below). If `chunks` is present and `applied < total`, the user approved only a subset — see "Partial approve" |
 | 2 | `request_changes` | address EVERY comment, then re-submit with `--session <id> --replies replies.json` (see below) |
 | 3 | `reject` | discard the changes (worktree mode: `git restore` the touched files), tell the user, ask how to proceed |
-| 4 | pending | follow the JSON `hint`: wait-mode `stop` = end your turn, let the user resume you; `poll` = `agent-change-reviewer wait <session-id>` |
+| 4 | pending | follow the JSON `hint`: wait-mode `stop` = end your turn, let the user resume you; `poll` = keep waiting with `wait` |
 | 5 | discussion | the user opened a discussion instead of deciding — reply to every comment (see below) |
 
 Result shape:
@@ -98,8 +107,8 @@ The reviewer can deselect individual chunks (a chunk = one contiguous run of cha
   "chunks": { "total": 4, "applied": 2,
     "skipped": [ { "file": "src/app.py", "hunk": 1, "run": 0, "kind": "update",
                    "dels": 1, "adds": 1, "oldLine": 21, "newLine": 21 } ],
-    "appliedPatch": "/home/user/.agent-change-reviewer/sessions/<id>/applied.patch",
-    "revertPatch": "/home/user/.agent-change-reviewer/sessions/<id>/revert.patch" } }
+    "appliedPatch": "<$DIR>/<session-id>/applied.patch",
+    "revertPatch": "<$DIR>/<session-id>/revert.patch" } }
 ```
 
 Skipped chunks are REJECTED content: do not apply them, do not fold them into later edits, and do not re-propose them unless the user asks. What you do next depends on the mode:
@@ -124,25 +133,26 @@ Reply to **every** comment, honestly and concretely — a brief ACK is fine when
 
 ```bash
 # answers.json: [{ "thread": 1, "answer": "the helper retries on 5xx only; this path needs 429 backoff" }]
-agent-change-reviewer answer <session-id> answers.json
+node "$REVIEWER" answer <session-id> answers.json --dir "$DIR"
 ```
 
-`agent-change-reviewer answer` posts your replies (keyed by each comment's `thread` id) and then blocks like `agent-change-reviewer wait` (same timeout/pending rules). Discussions are multi-turn: if the user discusses more comments — or replies back to one of your answers — you'll get another exit 5 the same way; a follow-up on an existing thread keeps its `thread` id and carries the earlier exchange in that comment's `history`. Do NOT change files while discussing — a discussion is conversation, not a change request; wait for the verdict.
+`answer` posts your replies (keyed by each comment's `thread` id) and then blocks like `wait` (same timeout/pending rules). Discussions are multi-turn: if the user discusses more comments — or replies back to one of your answers — you'll get another exit 5 the same way; a follow-up on an existing thread keeps its `thread` id and carries the earlier exchange in that comment's `history`. Do NOT change files while discussing — a discussion is conversation, not a change request; wait for the verdict.
 
 ## Re-submitting after request_changes (exit 2)
 
-Fix — or consciously skip — every comment, then re-submit as the next round of the SAME session, with a reply per comment keyed by its 0-based index in the verdict's `comments` array:
+Fix — or consciously skip — every comment, then re-submit as the next round of the SAME session (same `--dir`!), with a reply per comment keyed by its 0-based index in the verdict's `comments` array:
 
 ```bash
 # replies.json:
 # [ { "comment": 0, "reply": "fixed — switched to the retry helper" },
 #   { "comment": 1, "reply": "not changed: the null case is handled by the caller in src/api.py" } ]
-agent-change-reviewer review --worktree --session <id> --replies replies.json --title "..."
+node "$REVIEWER" review --worktree --session <id> --replies replies.json --title "..." --dir "$DIR"
 ```
 
 Every comment needs a reply — what you changed, or why you deliberately didn't. The CLI rejects incomplete or out-of-range replies (exit 1) and lists the unanswered comments. The user sees your replies threaded under their comments in round 2; also briefly tell them what you changed.
 
 ## Troubleshooting
 
-- `command not found: agent-change-reviewer` — ask the user to install it (`npm install -g agent-change-reviewer`, or `npm link` in the agent-change-reviewer repo).
-- Network/socket permission error on start — a command sandbox is blocking the local UI server (it only binds 127.0.0.1). Re-run the command with sandbox disabled.
+- `Unknown file extension ".ts"` or a syntax error inside `reviewer.ts` — the user's Node is older than 22.18 (no native type stripping). Ask them to upgrade Node; there is nothing to build or install.
+- `listen EPERM` / socket permission error on start — a command sandbox is blocking the local UI server (it only binds 127.0.0.1). Re-run the command with the sandbox disabled.
+- `unknown session "<id>" in <dir>` — you passed a different `--dir` than the one the review was created with. The pending/discussion JSON's `dir` field has the right one.

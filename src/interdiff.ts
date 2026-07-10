@@ -1,4 +1,4 @@
-import type { DiffLine, FileDiff, FileStatus, Hunk } from "./types.js";
+import type { DiffLine, FileDiff, FileStatus, Hunk } from "./types.ts";
 
 // Computes the diff *between two rounds* of the same review: given round A's and
 // round B's patches (both produced against the same base tree), emit FileDiffs

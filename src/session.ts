@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyFileDiffToContent, filePathOf, filterFiles, type ChunkRef } from "./chunks.js";
+import { applyFileDiffToContent, filePathOf, filterFiles, type ChunkRef } from "./chunks.ts";
 import type {
   AnswerInput,
   ApplyOutcome,
@@ -14,12 +14,22 @@ import type {
   ReviewResult,
   ServerInfo,
   SessionRequest,
-} from "./types.js";
+} from "./types.ts";
 
-export const SESSIONS_ROOT = path.join(os.homedir(), ".agent-change-reviewer", "sessions");
+// Where sessions live. The agent provides it per review session (--dir) so nothing
+// is ever written to a fixed global path; the default serves humans running by hand.
+let dataRoot = path.join(os.tmpdir(), "change-review");
+
+export function setDataDir(dir: string): void {
+  dataRoot = dir;
+}
+
+export function dataDir(): string {
+  return dataRoot;
+}
 
 export function sessionDir(id: string): string {
-  return path.join(SESSIONS_ROOT, id);
+  return path.join(dataRoot, id);
 }
 
 const reqPath = (id: string) => path.join(sessionDir(id), "request.json");
@@ -51,8 +61,6 @@ export function createSession(opts: {
   title: string;
   patch: string;
   cwd: string;
-  kind?: SessionRequest["kind"];
-  meta?: SessionRequest["meta"];
   /** Agent replies to the previous round's comments; merged into the archived result. */
   replies?: CommentReply[];
 }): SessionRequest {
@@ -89,8 +97,6 @@ export function createSession(opts: {
     round,
     createdAt: existing?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    ...(opts.kind && { kind: opts.kind }),
-    ...(opts.meta && { meta: opts.meta }),
   };
   fs.writeFileSync(reqPath(id), JSON.stringify(req, null, 2));
   fs.writeFileSync(patchPath(id), opts.patch);
@@ -337,7 +343,7 @@ export function validateAnswers(threads: QuestionThread[], raw: unknown): Answer
     if (seen.has(id)) return `duplicate answer for thread ${id}`;
     const last = t.messages[t.messages.length - 1];
     if (!last || last.from !== "user") {
-      return `thread ${id} is already answered — run \`agent-change-reviewer wait\` if you only meant to keep waiting`;
+      return `thread ${id} is already answered — use the wait command if you only meant to keep waiting`;
     }
     seen.add(id);
     answers.push({ thread: id, answer: a.answer.trim() });
@@ -390,7 +396,7 @@ export function stopServer(id: string): void {
 export function listSessions(): SessionRequest[] {
   let ids: string[];
   try {
-    ids = fs.readdirSync(SESSIONS_ROOT);
+    ids = fs.readdirSync(dataRoot);
   } catch {
     return [];
   }
@@ -417,7 +423,7 @@ export type Outcome =
   | { kind: "discussion"; threads: QuestionThread[] };
 
 /** Like waitForResult, but also returns early when the user hits "Discuss" — sending
- *  comments the agent must reply to (review sessions only — hook sessions can't reply). */
+ *  comments the agent must reply to. */
 export async function waitForOutcome(id: string, timeoutMs: number): Promise<Outcome | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -451,8 +457,8 @@ export async function ensureServer(id: string, port?: number): Promise<{ port: n
   // belong to someone else by now. Just forget it and start fresh.
   clearServerInfo(id);
 
-  const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-  const args = [cliPath, "serve", id, ...(port ? ["--port", String(port)] : [])];
+  const cliPath = fileURLToPath(new URL("../reviewer.ts", import.meta.url));
+  const args = [cliPath, "serve", id, "--dir", dataRoot, ...(port ? ["--port", String(port)] : [])];
   const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
   child.unref();
 
@@ -462,5 +468,5 @@ export async function ensureServer(id: string, port?: number): Promise<{ port: n
     if (liveNow && (await isHealthy(liveNow.port, id))) return { port: liveNow.port, restarted: true };
     await sleep(150);
   }
-  throw new Error(`the review server did not start — run \`agent-change-reviewer serve ${id}\` to see why`);
+  throw new Error(`the review server did not start — run \`node ${cliPath} serve ${id} --dir ${dataRoot}\` to see why`);
 }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 export function openBrowser(url: string): void {
-  if (process.env.AGENT_CHANGE_REVIEWER_NO_OPEN) return;
+  if (process.env.CHANGE_REVIEW_NO_OPEN) return;
   const [cmd, args]: [string, string[]] =
     process.platform === "darwin"
       ? ["open", [url]]

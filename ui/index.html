@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>agent-change-reviewer</title>
+<title>change-review</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root {
@@ -247,9 +247,8 @@ function commentAnchor(c) { return c.file + ANCHOR_SEP + c.side + ANCHOR_SEP + c
 // --- Per-chunk apply selection (UI prototype — the selection is not sent to the server yet) ---
 
 function chunkable() {
-  // Historical rounds and compare views are read-only; hook verdicts gate a single
-  // tool call, so they stay all-or-nothing.
-  return !state.data.readOnly && state.data.request.kind !== "hook";
+  // Historical rounds and compare views are read-only.
+  return !state.data.readOnly;
 }
 function chunkKey(fp, i) { return fp + ANCHOR_SEP + "chunk" + ANCHOR_SEP + i; }
 // key -> { file, hunk, run } | { file, binary: true } — the wire shape /api/submit expects.
@@ -293,7 +292,7 @@ function chunkCounts() {
   return { total: all.length, selected: all.filter((k) => !state.skipped.has(k)).length };
 }
 
-function draftKey() { return "agent-change-reviewer:" + state.data.request.id + ":" + state.data.request.round; }
+function draftKey() { return "change-review:" + state.data.request.id + ":" + state.data.request.round; }
 function saveDraft() {
   try {
     localStorage.setItem(draftKey(), JSON.stringify({
@@ -313,11 +312,6 @@ function restoreDraft() {
       state.skipped = new Set(d.skipped || []);
     }
   } catch (e) { /* ignore corrupt drafts */ }
-}
-
-function canAsk() {
-  // Hook sessions block the agent inside a PreToolUse call — it cannot run `agent-change-reviewer answer`.
-  return state.data.request.kind !== "hook";
 }
 
 /** Server threads still waiting on the agent (user spoke last, not closed). */
@@ -352,11 +346,11 @@ async function init() {
       return;
     }
   } catch (e) {
-    showFatal("Could not reach the review server. Restart it with: agent-change-reviewer wait <session-id>");
+    showFatal("Could not reach the review server. Ask the agent to re-run the review (reviewer.ts wait <session-id>).");
     return;
   }
   state.data = data;
-  document.title = "agent-change-reviewer — " + data.request.title;
+  document.title = "change-review — " + data.request.title;
   // Only the current round is editable, so drafts (and thread polling) apply only there.
   if (!data.readOnly) restoreDraft();
   renderAll();
@@ -841,8 +835,6 @@ function appendThreadTail(container, t) {
   const last = t.messages[t.messages.length - 1];
   if (last && last.from === "user") {
     container.appendChild(el("div", { class: "qstatus" }, "Sent to the agent — waiting for a reply."));
-  } else if (!canAsk()) {
-    container.appendChild(el("div", { class: "qstatus" }, "The agent replied."));
   } else if (state.replyDrafts[t.id] != null) {
     container.appendChild(replyComposer(t.id));
   } else {
@@ -986,37 +978,16 @@ function renderFooter() {
     input,
     el("span", { class: "count", id: "count" }, ""),
   ];
-  if (!chunkable()) {
-    // Hook sessions gate a single tool call: all-or-nothing verdicts, and no Discuss
-    // (the agent is blocked in the PreToolUse call and can't reply mid-review).
-    kids.push(
-      el("button", {
-        class: "verdict approve", onclick: () => submit("approve"),
-        title: "Changes are applied as-is, this review is closed, comments are forwarded to the LLM as fun-facts.",
-      }, "Approve"),
-      el("button", {
-        class: "verdict request", onclick: () => submit("request_changes"),
-        title: "Agent submits a new revision, applying changes discussed.",
-      }, "Request changes"),
-      el("button", {
-        class: "verdict reject", onclick: () => submit("reject"),
-        title: "Changes are rejected as-is, this review is closed.",
-      }, "Reject"),
-    );
-    return el("footer", {}, kids);
-  }
   kids.push(el("span", { class: "bulk" }, [
     "Chunks: ",
     el("a", { onclick: () => setAllChunks(true) }, "all"),
     " · ",
     el("a", { onclick: () => setAllChunks(false) }, "none"),
   ]));
-  if (canAsk()) {
-    kids.push(el("button", {
-      class: "verdict discuss", id: "discuss", onclick: discussAll,
-      title: "Agent replies in the same review revision, no content changes are made.",
-    }, "Discuss"));
-  }
+  kids.push(el("button", {
+    class: "verdict discuss", id: "discuss", onclick: discussAll,
+    title: "Agent replies in the same review revision, no content changes are made.",
+  }, "Discuss"));
   kids.push(
     el("button", {
       class: "verdict request", onclick: () => submit("request_changes"),
@@ -1163,7 +1134,7 @@ function setBanner(show) {
   if (show) {
     b.textContent =
       "Connection to the review server lost — your comments are saved locally. " +
-      "When the agent re-runs the review (agent-change-reviewer wait), reload this page.";
+      "When the agent re-runs the review (reviewer.ts wait), reload this page.";
   }
 }
 
