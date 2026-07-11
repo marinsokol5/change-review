@@ -18,6 +18,17 @@ Ground rules:
 - Pick `$DIR` **once per review session** and pass `--dir "$DIR"` to EVERY command of that review — later rounds, `wait`, `answer`, `result` included. All session state lives under it; a different `--dir` simply won't find the session. Every JSON the CLI prints echoes the dir and the exact next command, so follow those verbatim.
 - Run it from the repo root. Never run it in the background — the blocking call IS the review. ALWAYS run it with the command sandbox disabled: it binds localhost, which sandboxes block (`listen EPERM`).
 
+## Shorthands — routing `/change-review <args>`
+
+Invoked as a slash command, the text after `/change-review` arrives as `ARGUMENTS`. Route it before anything else:
+
+- **`edit`** — your most recent file edit(s) that did **not** land (a rejected Edit/Write permission prompt, an interrupted turn). Reconstruct each touched file's complete post-edit contents from your own context and review them in **proposal mode** — on approve the CLI writes them. If those edits actually landed already, treat as `diff`.
+- **`diff`** — the uncommitted working-tree changes: **worktree mode**.
+- **`commit [<ref-or-range>]`** — the last commit (default `HEAD~1 HEAD`) or the given range (e.g. `main...HEAD`): pipe `git diff` into **patch mode** (example below). This reviews history — there is nothing to apply or revert; on request_changes, make fresh edits in the worktree and resubmit as round 2 of the same session.
+- **one or more file paths** — **annotation mode** on those files.
+- **`resume`** — don't open anything; the user is saying a pending review moved (verdict submitted, or questions asked). Run `node "$REVIEWER" result <session-id> --dir "$DIR"` for the open session.
+- **anything else** — free text describing what to review: pick the matching mode. No arguments: with uncommitted changes present, default to `diff`; with a clean tree, ask what to review.
+
 ## Invoking — pick one mode
 
 **Worktree mode (preferred in a git repo).** Apply your changes to the working tree first, then:
@@ -42,7 +53,11 @@ New files are fine (they diff against nothing). File deletions can't be expresse
 
 On approve, the CLI itself writes the reviewed files into the repo, byte-for-byte what the user saw — filtered down to the chunks the user selected if they approved only a subset — do NOT re-write them yourself. The verdict JSON's `apply` field tells you how it went (see "Approve in proposal mode" below), and `chunks` describes a partial selection (see "Partial approve").
 
-**Patch mode.** If you already have a unified diff: `node "$REVIEWER" review changes.patch --dir "$DIR"`, or pipe it on stdin.
+**Patch mode.** If you already have a unified diff: `node "$REVIEWER" review changes.patch --dir "$DIR"`, or pipe it on stdin — e.g. the last commit or a branch:
+
+```bash
+git diff --no-color HEAD~1 HEAD | node "$REVIEWER" review - --title "Review: last commit" --dir "$DIR"
+```
 
 **Annotation mode (comment on existing code — no diff yet).** When the user wants to mark up current files before any change exists ("let me annotate", "I'll comment on the code", planning a change together), open the files as-is:
 
