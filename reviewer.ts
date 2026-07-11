@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { buildAnnotationPatch } from "./src/annotate.ts";
 import * as config from "./src/config.ts";
 import { openBrowser } from "./src/open.ts";
 import { buildProposalPatch } from "./src/proposal.ts";
@@ -32,6 +33,9 @@ Usage:
     --proposal <dir>                review a proposal dir mirroring repo-relative paths;
                                     on approve the CLI writes the reviewed files into the repo
                                     itself (verdict JSON reports it under "apply")
+    --file <path>                   annotation mode (repeatable): open the file as-is — no diff —
+                                    to collect line comments on existing code; the agent's changes
+                                    then come back as round 2 of the same session
     -t, --title <title>             review title shown in the UI
     -s, --session <id>              reuse a session id (next round of the same review)
     --replies <file>                with --session: JSON replies to the previous round's comments,
@@ -140,12 +144,18 @@ async function cmdReview(args: string[]): Promise<void> {
       worktree: { type: "boolean", default: false },
       base: { type: "string", default: "HEAD" },
       proposal: { type: "string" },
+      file: { type: "string", multiple: true },
       "no-open": { type: "boolean", default: false },
     },
     allowPositionals: true,
   });
 
+  if (values.file?.length && (values.worktree || values.proposal || positionals[0])) {
+    fail("--file (annotation mode) cannot be combined with --worktree, --proposal, or a patch file");
+  }
+
   let patch: string;
+  let defaultTitle = `Changes in ${path.basename(process.cwd())}`;
   let proposalFiles: Array<{ rel: string; src: string }> | undefined;
   if (values.worktree) {
     const r = spawnSync("git", ["diff", "--no-color", values.base], {
@@ -158,6 +168,10 @@ async function cmdReview(args: string[]): Promise<void> {
     const built = buildProposalPatch(path.resolve(values.proposal), process.cwd());
     patch = built.patch;
     proposalFiles = built.files;
+  } else if (values.file?.length) {
+    const annot = buildAnnotationPatch(values.file, process.cwd());
+    patch = annot.patch;
+    defaultTitle = annot.files.length === 1 ? `Annotate ${annot.files[0]}` : `Annotate ${annot.files.length} files`;
   } else if (positionals[0] && positionals[0] !== "-") {
     try {
       patch = fs.readFileSync(positionals[0], "utf8");
@@ -192,7 +206,7 @@ async function cmdReview(args: string[]): Promise<void> {
 
   const req = session.createSession({
     id: values.session,
-    title: values.title ?? `Changes in ${path.basename(process.cwd())}`,
+    title: values.title ?? defaultTitle,
     patch,
     cwd: process.cwd(),
     replies,

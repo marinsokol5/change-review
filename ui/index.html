@@ -56,11 +56,11 @@
     background: var(--panel); border-bottom: 1px solid var(--border);
   }
 
-  #ro-notice {
+  #ro-notice, .info-notice {
     margin: 12px 20px -4px; padding: 8px 12px; border: 1px solid var(--border);
     border-left: 3px solid var(--accent); border-radius: 4px; font-size: 13px; color: var(--muted);
   }
-  #ro-notice a { color: var(--accent); }
+  #ro-notice a, .info-notice a { color: var(--accent); }
 
   section.file { margin: 16px 20px; border: 1px solid var(--border); border-radius: 6px; }
   .file-header {
@@ -387,21 +387,30 @@ function renderAll() {
   app.textContent = "";
 
   const roundLabel = diffAgainst != null ? "round " + diffAgainst + " → round " + round : "round " + round;
-  const headerKids = [
-    el("h1", {}, request.title),
-    el("div", { class: "meta" }, [
-      "session " + request.id + " · " + roundLabel + " · " +
-        files.length + (files.length === 1 ? " file " : " files "),
-      el("span", { class: "stat-add" }, "+" + s.add),
-      " ",
-      el("span", { class: "stat-del" }, "−" + s.del),
-    ]),
+  const metaKids = [
+    "session " + request.id + " · " + roundLabel + " · " +
+      files.length + (files.length === 1 ? " file" : " files"),
   ];
+  if (s.add + s.del > 0) {
+    metaKids.push(" ", el("span", { class: "stat-add" }, "+" + s.add), " ", el("span", { class: "stat-del" }, "−" + s.del));
+  }
+  const headerKids = [el("h1", {}, request.title), el("div", { class: "meta" }, metaKids)];
   // The rounds nav only appears once there's more than the current round to look at.
   if (rounds && rounds.length > 1) headerKids.push(renderRoundsNav());
   app.appendChild(el("header", {}, headerKids));
 
   if (readOnly) app.appendChild(renderReadOnlyNotice());
+  // Annotation mode: a live round whose "diff" is all context — existing code opened
+  // purely so the user can leave line comments. (Binary/rename-only diffs also have
+  // zero +/- lines but aren't annotation views.)
+  const allContext = files.length > 0 && s.add + s.del === 0 &&
+    files.every((f) => f.status === "modified" && f.hunks.length > 0);
+  if (!readOnly && allContext) {
+    app.appendChild(el("div", { class: "info-notice" },
+      "Annotating current code — nothing is proposed yet. Leave line comments, then Request changes " +
+      "to send them to the agent; its edits arrive as the next round of this review. " +
+      "Looks good closes the review with no changes requested."));
+  }
 
   if (files.length === 0) {
     const msg = diffAgainst != null
@@ -570,10 +579,12 @@ function renderFile(f) {
     if (l.type === "add") add++;
     else if (l.type === "del") del++;
   }
+  // An all-context file (annotation mode) isn't "modified" — no badge, no +0 −0.
+  const unchanged = add + del === 0 && f.status === "modified";
   const header = el("div", { class: "file-header" }, [
-    el("span", { class: "badge " + f.status }, f.status),
+    unchanged ? null : el("span", { class: "badge " + f.status }, f.status),
     el("span", { class: "path" }, fileLabel(f)),
-    el("span", { class: "fstat" }, [
+    unchanged ? null : el("span", { class: "fstat" }, [
       el("span", { class: "stat-add" }, "+" + add),
       " ",
       el("span", { class: "stat-del" }, "−" + del),
@@ -606,10 +617,13 @@ function renderFile(f) {
   const fp = filePath(f);
   f.hunks.forEach((h, hi) => {
     computeIntraHunk(h.lines);
-    tbody.appendChild(el("tr", { class: "hunk" }, [
-      el("td", { colspan: "5" },
-        "@@ -" + h.oldStart + "," + h.oldCount + " +" + h.newStart + "," + h.newCount + " @@ " + (h.section || "")),
-    ]));
+    // A pure-context hunk (annotation mode: the whole file, unchanged) needs no @@ header.
+    if (h.lines.some((l) => l.type !== "context")) {
+      tbody.appendChild(el("tr", { class: "hunk" }, [
+        el("td", { colspan: "5" },
+          "@@ -" + h.oldStart + "," + h.oldCount + " +" + h.newStart + "," + h.newCount + " @@ " + (h.section || "")),
+      ]));
+    }
     // Map each changed line to its run; the run's first line carries the apply toggle.
     const runOf = new Array(h.lines.length).fill(null);
     const runFirst = new Set();
@@ -978,12 +992,14 @@ function renderFooter() {
     input,
     el("span", { class: "count", id: "count" }, ""),
   ];
-  kids.push(el("span", { class: "bulk" }, [
-    "Chunks: ",
-    el("a", { onclick: () => setAllChunks(true) }, "all"),
-    " · ",
-    el("a", { onclick: () => setAllChunks(false) }, "none"),
-  ]));
+  if (allChunkKeys().length > 0) {
+    kids.push(el("span", { class: "bulk" }, [
+      "Chunks: ",
+      el("a", { onclick: () => setAllChunks(true) }, "all"),
+      " · ",
+      el("a", { onclick: () => setAllChunks(false) }, "none"),
+    ]));
+  }
   kids.push(el("button", {
     class: "verdict discuss", id: "discuss", onclick: discussAll,
     title: "Agent replies in the same review revision, no content changes are made.",
@@ -1021,8 +1037,11 @@ function updateFooter() {
     const { total, selected } = chunkCounts();
     applyBtn.classList.toggle("none", total > 0 && selected === 0);
     if (total === 0) {
-      applyBtn.textContent = "Apply";
-      applyBtn.title = "The diff is empty — closes the review as approved.";
+      const annotating = state.data.files.length > 0;
+      applyBtn.textContent = annotating ? "Looks good" : "Apply";
+      applyBtn.title = annotating
+        ? "No changes requested — closes the review as approved."
+        : "The diff is empty — closes the review as approved.";
     } else if (selected === 0) {
       applyBtn.textContent = "Reject all";
       applyBtn.title = "No chunks selected — discards the whole change and closes the review.";

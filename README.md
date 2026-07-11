@@ -1,11 +1,11 @@
 # change-review
 
-**Code review for AI coding agents — with you as the reviewer.** Your agent proposes a change, your browser opens a GitHub-style inline diff, and your verdict — with line comments — goes straight back to the agent as JSON.
+**Code review for AI coding agents — with you as the reviewer.** Your agent proposes a change, your browser opens a GitHub-style inline diff, and your verdict and comments go straight back to the agent as JSON.
 
 ```
 agent ──"node reviewer.ts review …"──▶ diff UI in your browser
 you  ───── comments + verdict ──────▶ back to the agent
-                                       (JSON on stdout, exit code = verdict)
+
 ```
 
 Agents write diffs faster than anyone can read them in a terminal. change-review turns the wall of scrolling green text into a review you can actually do:
@@ -14,6 +14,7 @@ Agents write diffs faster than anyone can read them in a terminal. change-review
 - **Apply only what you approve** — every chunk has a checkbox in the gutter. Untick the parts you don't want; **Apply** lands exactly the rest.
 - **Discuss before you decide** — send your comments to the agent mid-review; its replies thread inline, as many turns as you need.
 - **Rounds, not restarts** — on **Request changes** the agent resubmits to the same review, its replies threaded under your comments. Earlier rounds stay browsable; a ⇄ view diffs any two revisions.
+- **Start from the code, not the diff** — `--file` opens existing files for line comments before anything is written. Your annotations become the spec; the agent's edits arrive as round 2 of the same review.
 - **Nothing to babysit** — the review server outlives the agent's command, so a verdict is never lost to a timeout. Zero runtime dependencies, one self-contained HTML file, binds `127.0.0.1` only.
 
 ## Install
@@ -35,7 +36,7 @@ node reviewer.ts review examples/demo.patch --title "Demo review"
 
 ## How it works
 
-The agent runs `node <skill-dir>/reviewer.ts review` with `--worktree` (review uncommitted changes), `--proposal <dir>` (review *before* anything is written — on approve the CLI itself writes the reviewed bytes, sha256-verified, all-or-nothing, filtered to your chunk selection), or any unified diff. The command blocks until you decide:
+The agent runs `node <skill-dir>/reviewer.ts review` with `--worktree` (review uncommitted changes), `--proposal <dir>` (review *before* anything is written — on approve the CLI itself writes the reviewed bytes, sha256-verified, all-or-nothing, filtered to your chunk selection), `--file <path>` (annotate existing code), or any unified diff. The command blocks until you decide:
 
 ```json
 {
@@ -55,7 +56,6 @@ Sessions live in a temp directory the agent picks (`--dir`); nothing is written 
 
 - **[SKILL.md](SKILL.md)** — the full agent contract (commands, JSON shapes, exit codes)
 - **[AGENTS.md](AGENTS.md)** — development guide (architecture, invariants, how to test)
-- **[ROADMAP.md](ROADMAP.md)** — what's next
 
 ## License
 

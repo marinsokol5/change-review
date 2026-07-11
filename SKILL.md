@@ -1,6 +1,6 @@
 ---
 name: change-review
-description: Open an interactive human review of proposed file changes. The user sees an inline diff in their browser, leaves line comments, and returns a verdict (approve / request_changes / reject) printed as JSON on stdout. Use before applying substantive or risky changes, whenever the user asks to review a change ("let me review", "show me the diff", "open a review"), or to re-review after addressing feedback.
+description: Open an interactive human review of proposed file changes. The user sees an inline diff in their browser, leaves line comments, and returns a verdict (approve / request_changes / reject) printed as JSON on stdout. Use before applying substantive or risky changes, whenever the user asks to review a change ("let me review", "show me the diff", "open a review"), or to re-review after addressing feedback. Can also open existing files with no diff for line-comment annotation ("let me annotate", "I want to comment on the code") — the user's comments become the spec, and your edits come back as round 2 of the same review.
 ---
 
 # Human change review (`reviewer.ts`)
@@ -43,6 +43,14 @@ New files are fine (they diff against nothing). File deletions can't be expresse
 On approve, the CLI itself writes the reviewed files into the repo, byte-for-byte what the user saw — filtered down to the chunks the user selected if they approved only a subset — do NOT re-write them yourself. The verdict JSON's `apply` field tells you how it went (see "Approve in proposal mode" below), and `chunks` describes a partial selection (see "Partial approve").
 
 **Patch mode.** If you already have a unified diff: `node "$REVIEWER" review changes.patch --dir "$DIR"`, or pipe it on stdin.
+
+**Annotation mode (comment on existing code — no diff yet).** When the user wants to mark up current files before any change exists ("let me annotate", "I'll comment on the code", planning a change together), open the files as-is:
+
+```bash
+node "$REVIEWER" review --file src/auth.py --file src/api.py --title "Annotate auth flow" --dir "$DIR"
+```
+
+The UI shows each file's current contents for line comments; text files only, deduplicated, paths relative to the repo root. The user typically finishes with **Request changes** (exit 2) — those comments are the spec: implement them, then resubmit as the next round of the SAME session exactly like any other request_changes (worktree or proposal mode, `--session` + `--replies`), so the user reviews your edits threaded under their annotations. **Looks good** (approve, exit 0) means the code is fine as-is — change nothing. **Discuss** (exit 5) works too: line-anchored questions about existing code that you answer without editing anything.
 
 ## Timeouts and pending reviews — important
 
