@@ -21,8 +21,8 @@ Agents write diffs faster than anyone can read them in a terminal. change-review
 This repo **is** the skill — installing it is copying it into your agent's skills folder:
 
 ```bash
-git clone <repo-url> ~/.claude/skills/change-review    # Claude Code
-git clone <repo-url> ~/.codex/skills/change-review     # Codex
+git clone https://github.com/marinsokol5/change-review ~/.claude/skills/change-review    # Claude Code
+git clone https://github.com/marinsokol5/change-review ~/.codex/skills/change-review     # Codex
 ```
 
 Requires **Node >= 22.18**: the CLI is TypeScript that `node` runs directly, so there is no build step and no `npm install`. Restart your agent session so it picks the skill up; update later with `git pull`.

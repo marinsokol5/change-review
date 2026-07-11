@@ -4,6 +4,10 @@
   "description": "A pull-request-style review step for AI coding agents: inline diff UI in the browser, line comments, and a verdict piped back to the agent as JSON. Distributed as an agent skill — no package install, no build.",
   "license": "MIT",
   "author": "Marin Sokol",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marinsokol5/change-review.git"
+  },
   "private": true,
   "keywords": [
     "code-review",
