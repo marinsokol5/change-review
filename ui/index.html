@@ -244,7 +244,7 @@ function fileLabel(f) {
 }
 function commentAnchor(c) { return c.file + ANCHOR_SEP + c.side + ANCHOR_SEP + c.line; }
 
-// --- Per-chunk apply selection (UI prototype — the selection is not sent to the server yet) ---
+// --- Per-chunk apply selection (sent to /api/submit as `skipped` chunk refs) ---
 
 function chunkable() {
   // Historical rounds and compare views are read-only.
@@ -1028,7 +1028,7 @@ function updateFooter() {
       applyBtn.title = "No chunks selected — discards the whole change and closes the review.";
     } else if (selected === total) {
       applyBtn.textContent = total === 1 ? "Apply" : "Apply all " + total + " chunks";
-      applyBtn.title = "Applies every chunk as-is and closes the review. Comments are forwarded to the agent as fun-facts.";
+      applyBtn.title = "Applies every chunk as-is and closes the review. Comments ride along as advisory notes.";
     } else {
       applyBtn.textContent = "Apply " + selected + " of " + total + " chunks";
       applyBtn.title = "Applies only the selected chunks; the " + (total - selected) + " skipped " +
