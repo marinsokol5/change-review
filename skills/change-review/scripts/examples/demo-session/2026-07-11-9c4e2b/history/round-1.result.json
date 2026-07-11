@@ -1,0 +1,49 @@
+{
+  "verdict": "request_changes",
+  "summary": "Right direction, but the retry behavior isn't production-safe yet. Also: there are no tests — cover the backoff schedule and the give-up path before this lands.",
+  "comments": [
+    {
+      "file": "src/retry.py",
+      "side": "new",
+      "line": 1,
+      "body": "Did you consider tenacity instead of hand-rolling this?",
+      "discussion": [
+        {
+          "from": "user",
+          "body": "Did you consider tenacity instead of hand-rolling this?",
+          "at": "2026-07-11T14:04:14.556Z"
+        },
+        {
+          "from": "agent",
+          "body": "I did — but the project keeps runtime dependencies at zero (stdlib + requests only), so I hand-rolled the ~15 lines. tenacity would be the right call otherwise.",
+          "at": "2026-07-11T14:04:14.563Z"
+        }
+      ],
+      "reply": "Kept stdlib-only per the discussion — tenacity stays out."
+    },
+    {
+      "file": "src/retry.py",
+      "side": "new",
+      "line": 12,
+      "body": "A fixed 1-second sleep will hammer an API that's already struggling. Use exponential backoff with jitter.",
+      "reply": "Fixed — exponential backoff (base 0.5 s, cap 8 s) with full jitter."
+    },
+    {
+      "file": "src/retry.py",
+      "side": "new",
+      "line": 9,
+      "body": "Retrying on bare Exception hides real bugs — a TypeError or a 404 gets retried ten times. Catch only connection errors and 5xx responses.",
+      "reply": "Now retries only requests.ConnectionError and 5xx HTTPError; everything else raises immediately."
+    },
+    {
+      "file": "src/api.py",
+      "side": "new",
+      "line": 12,
+      "body": "When every attempt fails we surface the last error with no sign that retries happened — consider a WARNING log per retry.",
+      "reply": "Not changed: kept the helper log-free — callers own observability; the docstring now says so."
+    }
+  ],
+  "session": "2026-07-11-9c4e2b",
+  "round": 1,
+  "submittedAt": "2026-07-11T14:04:14.565Z"
+}

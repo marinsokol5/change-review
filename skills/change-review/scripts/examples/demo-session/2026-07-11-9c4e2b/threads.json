@@ -1,0 +1,40 @@
+[
+  {
+    "id": 1,
+    "file": "src/retry.py",
+    "side": "new",
+    "line": 1,
+    "round": 1,
+    "messages": [
+      {
+        "from": "user",
+        "body": "Did you consider tenacity instead of hand-rolling this?",
+        "at": "2026-07-11T14:04:14.556Z"
+      },
+      {
+        "from": "agent",
+        "body": "I did — but the project keeps runtime dependencies at zero (stdlib + requests only), so I hand-rolled the ~15 lines. tenacity would be the right call otherwise.",
+        "at": "2026-07-11T14:04:14.563Z"
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "file": "src/retry.py",
+    "side": "new",
+    "line": 21,
+    "round": 3,
+    "messages": [
+      {
+        "from": "user",
+        "body": "random.uniform is unseeded — any chance of flaky timing in CI?",
+        "at": "2026-07-11T14:04:18.789Z"
+      },
+      {
+        "from": "agent",
+        "body": "None reaches CI: the tests stub random.uniform and time.sleep via monkeypatch. In production the jitter must stay unseeded — that's what prevents synchronized retry storms.",
+        "at": "2026-07-11T14:04:18.792Z"
+      }
+    ]
+  }
+]

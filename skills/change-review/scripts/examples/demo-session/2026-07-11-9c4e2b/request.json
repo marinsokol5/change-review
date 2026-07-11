@@ -1,0 +1,8 @@
+{
+  "id": "2026-07-11-9c4e2b",
+  "title": "Add retry with exponential backoff to ApiClient",
+  "cwd": "/home/dev/acme-api",
+  "round": 3,
+  "createdAt": "2026-07-11T14:04:13.343Z",
+  "updatedAt": "2026-07-11T14:04:17.606Z"
+}

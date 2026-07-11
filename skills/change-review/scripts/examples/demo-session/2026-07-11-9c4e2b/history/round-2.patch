@@ -1,0 +1,90 @@
+diff --git a/src/api.py b/src/api.py
+index 66583d3..64c3800 100644
+--- a/src/api.py
++++ b/src/api.py
+@@ -1,5 +1,7 @@
+ import requests
+ 
++from retry import with_retry
++
+ 
+ class ApiClient:
+     def __init__(self, base_url: str, timeout: float = 10.0):
+@@ -7,11 +9,12 @@ class ApiClient:
+         self.timeout = timeout
+ 
+     def get_user(self, user_id: int) -> dict:
+-        resp = requests.get(f"{self.base_url}/users/{user_id}", timeout=self.timeout)
+-        resp.raise_for_status()
+-        return resp.json()
++        return with_retry(lambda: self._get(f"/users/{user_id}"))
+ 
+     def list_orders(self, user_id: int) -> list[dict]:
+-        resp = requests.get(f"{self.base_url}/users/{user_id}/orders", timeout=self.timeout)
++        return with_retry(lambda: self._get(f"/users/{user_id}/orders"))
++
++    def _get(self, path: str) -> dict | list:
++        resp = requests.get(f"{self.base_url}{path}", timeout=self.timeout)
+         resp.raise_for_status()
+         return resp.json()
+diff --git a/src/retry.py b/src/retry.py
+new file mode 100644
+index 0000000..3f1c76d
+--- /dev/null
++++ b/src/retry.py
+@@ -0,0 +1,21 @@
++import random
++import time
++
++import requests
++
++RETRYABLE_STATUS = range(500, 600)
++
++
++def with_retry(fn, attempts: int = 10, base_delay: float = 0.5, max_delay: float = 8.0):
++    """Retry fn on 5xx/connection errors with exponential backoff + full jitter; raises the last error (callers own logging)."""
++    for i in range(attempts):
++        try:
++            return fn()
++        except requests.HTTPError as err:
++            status = err.response.status_code if err.response is not None else None
++            if status not in RETRYABLE_STATUS or i == attempts - 1:
++                raise
++        except requests.ConnectionError:
++            if i == attempts - 1:
++                raise
++        time.sleep(random.uniform(0, min(max_delay, base_delay * 2 ** i)))
+diff --git a/tests/test_retry.py b/tests/test_retry.py
+new file mode 100644
+index 0000000..fdbc57a
+--- /dev/null
++++ b/tests/test_retry.py
+@@ -0,0 +1,28 @@
++import pytest
++import requests
++
++from retry import with_retry
++
++
++def test_returns_first_success(monkeypatch):
++    monkeypatch.setattr("time.sleep", lambda _: None)
++    calls = []
++
++    def flaky():
++        calls.append(1)
++        if len(calls) < 3:
++            raise requests.ConnectionError()
++        return "ok"
++
++    assert with_retry(flaky) == "ok"
++    assert len(calls) == 3
++
++
++def test_gives_up_after_max_attempts(monkeypatch):
++    monkeypatch.setattr("time.sleep", lambda _: None)
++
++    def always_down():
++        raise requests.ConnectionError()
++
++    with pytest.raises(requests.ConnectionError):
++        with_retry(always_down, attempts=4)

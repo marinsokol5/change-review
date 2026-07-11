@@ -1,0 +1,23 @@
+{
+  "verdict": "request_changes",
+  "summary": "Close — two small things and it ships.",
+  "comments": [
+    {
+      "file": "src/retry.py",
+      "side": "new",
+      "line": 9,
+      "body": "attempts=10 with an 8 s cap can hang a user-facing call for the best part of a minute. Default to 3; callers can opt into more.",
+      "reply": "Default is now attempts=3 — callers opt into more explicitly."
+    },
+    {
+      "file": "tests/test_retry.py",
+      "side": "new",
+      "line": 28,
+      "body": "Nothing pins the jitter bound — add a test asserting the delay never exceeds max_delay; that's the part most likely to regress.",
+      "reply": "Added test_delay_respects_cap: records uniform()'s upper bound over 6 attempts and asserts it never exceeds max_delay."
+    }
+  ],
+  "session": "2026-07-11-9c4e2b",
+  "round": 2,
+  "submittedAt": "2026-07-11T14:04:16.685Z"
+}

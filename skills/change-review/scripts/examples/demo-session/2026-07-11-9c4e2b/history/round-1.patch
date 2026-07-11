@@ -1,0 +1,47 @@
+diff --git a/src/api.py b/src/api.py
+index 66583d3..64c3800 100644
+--- a/src/api.py
++++ b/src/api.py
+@@ -1,5 +1,7 @@
+ import requests
+ 
++from retry import with_retry
++
+ 
+ class ApiClient:
+     def __init__(self, base_url: str, timeout: float = 10.0):
+@@ -7,11 +9,12 @@ class ApiClient:
+         self.timeout = timeout
+ 
+     def get_user(self, user_id: int) -> dict:
+-        resp = requests.get(f"{self.base_url}/users/{user_id}", timeout=self.timeout)
+-        resp.raise_for_status()
+-        return resp.json()
++        return with_retry(lambda: self._get(f"/users/{user_id}"))
+ 
+     def list_orders(self, user_id: int) -> list[dict]:
+-        resp = requests.get(f"{self.base_url}/users/{user_id}/orders", timeout=self.timeout)
++        return with_retry(lambda: self._get(f"/users/{user_id}/orders"))
++
++    def _get(self, path: str) -> dict | list:
++        resp = requests.get(f"{self.base_url}{path}", timeout=self.timeout)
+         resp.raise_for_status()
+         return resp.json()
+diff --git a/src/retry.py b/src/retry.py
+new file mode 100644
+index 0000000..bbcf075
+--- /dev/null
++++ b/src/retry.py
+@@ -0,0 +1,12 @@
++import time
++
++
++def with_retry(fn, attempts: int = 10):
++    """Call fn, retrying on any exception."""
++    for i in range(attempts):
++        try:
++            return fn()
++        except Exception:
++            if i == attempts - 1:
++                raise
++            time.sleep(1)

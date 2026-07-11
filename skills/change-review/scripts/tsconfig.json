@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["reviewer.ts", "src"]
+  "include": ["reviewer.ts", "src", "examples"]
 }

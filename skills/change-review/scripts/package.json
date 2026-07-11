@@ -22,7 +22,9 @@
   "type": "module",
   "scripts": {
     "check": "tsc",
-    "demo": "node reviewer.ts review examples/demo.patch --title 'Demo review'"
+    "demo": "node examples/demo.ts",
+    "demo:fresh": "node reviewer.ts review examples/demo.patch --title 'Demo review'",
+    "demo:rebuild": "node examples/build-demo.ts"
   },
   "engines": {
     "node": ">=22.18"
