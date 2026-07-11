@@ -63,7 +63,7 @@ The skill is `skills/change-review/` (manifest `SKILL.md` + the CLI package in `
 
 No automated tests yet (planned — see [ROADMAP.md](ROADMAP.md)). Manual loop:
 
-- `npm run check` type-checks; `npm run demo` exercises the full path with `examples/demo.patch`.
+- `npm run check` type-checks; `npm run demo` boots the committed 3-round demo review (`examples/demo-session/`, copied to a fresh temp dir per run so verdicts never dirty the repo): rounds 1–2 archived with threaded replies and a Discuss exchange, round 3 live with an answered thread — the standing fixture for UI work and README screenshots. `npm run demo:rebuild` regenerates the snapshot by replaying the story through the real CLI + server (`examples/build-demo.ts`, run unsandboxed) — do that whenever the session format changes. `npm run demo:fresh` opens `examples/demo.patch` as a new single-round review.
 - `node reviewer.ts serve <id> --dir <dir>` runs the server in the foreground to see errors.
 - `node reviewer.ts list --dir <dir>` shows that dir's sessions; use a scratch `--dir` and delete it when done.
 - `--worktree` needs a git repo with uncommitted changes; `--proposal` and patch mode work anywhere.

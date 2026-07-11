@@ -1,21 +1,10 @@
-# change-review
+# change-review Agent Skill
 
-**Code review for AI coding agents — with you as the reviewer.** Your agent proposes a change, your browser opens a GitHub-style inline diff, and your verdict and comments go straight back to the agent as JSON.
+**The human review step for AI-written changes.** Your agent proposes chanes, you review them in your browser, in a UX that's a mix between a GitHub PR and a VS Code inline diff, and your comments and verdict go straight back to the agent.
 
+![](./screenshots/demo.png)
 
-```mermaid
-sequenceDiagram
-    participant You as you
-    participant Agent as agent
-    participant Browser as diff UI (browser)
-    You->>Agent: /change-review
-    Agent->>Browser: node reviewer.ts review …
-    You->>Browser: Comment <br/>pick chunks, choose a verdict
-    Browser->>Agent: {verdict, comments[]} on stdout<br/>exit code mirrors the verdict
-    Agent->>You: acts on your verdict
-```
-
-Agents write diffs faster than anyone can read them in a terminal. change-review turns the wall of scrolling green text into a review you can actually do:
+Iterate together on a change through:
 
 - **A real diff UI** — inline, in your browser. Hover a line, click `+`, comment.
 - **Apply only what you approve** — every chunk has a checkbox in the gutter. Untick the parts you don't want; **Apply** lands exactly the rest.
