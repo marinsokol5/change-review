@@ -995,9 +995,9 @@ function renderFooter() {
   if (allChunkKeys().length > 0) {
     kids.push(el("span", { class: "bulk" }, [
       "Chunks: ",
-      el("a", { onclick: () => setAllChunks(true) }, "all"),
+      el("a", { onclick: () => setAllChunks(true) }, "All"),
       " · ",
-      el("a", { onclick: () => setAllChunks(false) }, "none"),
+      el("a", { onclick: () => setAllChunks(false) }, "None"),
     ]));
   }
   kids.push(el("button", {
