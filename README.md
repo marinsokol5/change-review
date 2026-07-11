@@ -2,10 +2,17 @@
 
 **Code review for AI coding agents — with you as the reviewer.** Your agent proposes a change, your browser opens a GitHub-style inline diff, and your verdict and comments go straight back to the agent as JSON.
 
-```
-agent ──"node reviewer.ts review …"──▶ diff UI in your browser
-you  ───── comments + verdict ──────▶ back to the agent
 
+```mermaid
+sequenceDiagram
+    participant You as you
+    participant Agent as agent
+    participant Browser as diff UI (browser)
+    You->>Agent: /change-review
+    Agent->>Browser: node reviewer.ts review …
+    You->>Browser: Comment <br/>pick chunks, choose a verdict
+    Browser->>Agent: {verdict, comments[]} on stdout<br/>exit code mirrors the verdict
+    Agent->>You: acts on your verdict
 ```
 
 Agents write diffs faster than anyone can read them in a terminal. change-review turns the wall of scrolling green text into a review you can actually do:
@@ -25,15 +32,7 @@ npx skills add marinsokol5/change-review    # Claude Code, Codex, …
 npx skills update change-review             # later, to pull updates
 ```
 
-Or manually: copy `skills/change-review/` from this repo into `~/.claude/skills/` (or `~/.codex/skills/`).
-
 Requires **Node >= 22.18**: the CLI is TypeScript that `node` runs directly, so there is no build step and no `npm install`. Restart your agent session so it picks the skill up.
-
-Try it without an agent:
-
-```bash
-cd skills/change-review/scripts && npm run demo
-```
 
 ## Usage
 
@@ -67,6 +66,19 @@ The agent runs `node <skill-dir>/scripts/reviewer.ts review` with `--worktree` (
 ```
 
 Exit codes mirror the verdict: `0` approve · `2` request_changes · `3` reject · `4` pending · `5` discussion · `1` error.
+
+```mermaid
+flowchart TD
+    A[agent opens round N] --> B[you read the diff:<br/>comment lines, untick chunks]
+    B -- Discuss --> C[agent answers inline,<br/>no files change]
+    C --> B
+    B -- "Apply (all or selected chunks)" --> D[approved chunks land deterministically,<br/>skipped ones are discarded]
+    B -- Request changes --> E[agent fixes every comment,<br/>replies thread under each]
+    E -- round N+1 --> A
+    B -- Reject --> F[changes discarded]
+```
+
+A partial Apply never depends on the model getting an edit right: the verdict ships ready-made `appliedPatch`/`revertPatch` files and the agent just runs `git apply` — and in proposal mode the CLI writes the approved bytes itself. Skipped chunks are removed deterministically, not re-typed.
 
 Sessions live in a temp directory the agent picks (`--dir`); nothing is written to fixed global paths. The UI server runs detached, so when the agent's command times out the review just keeps waiting — by default the agent ends its turn and picks the verdict up when you're done (`config wait-mode poll` makes it wait in a loop instead). Draft comments persist in localStorage, so a closed tab loses nothing.
 
