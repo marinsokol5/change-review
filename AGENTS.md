@@ -1,6 +1,6 @@
 # Developing change-review
 
-Instructions for working **on this codebase** — written for coding agents, useful for humans too. (The instructions for *using* the tool live in [SKILL.md](SKILL.md) at the repo root: this repo **is** the skill, installed by copying/cloning it into `~/.claude/skills/change-review` or `~/.codex/skills/change-review`.)
+Instructions for working **on this codebase** — written for coding agents, useful for humans too. (The instructions for *using* the tool live in [skills/change-review/SKILL.md](skills/change-review/SKILL.md): that folder is the skill, installed via `npx skills add marinsokol5/change-review` — which copies it into the agent's skills dir — with the CLI shipping inside it under `scripts/`.)
 
 ## What this is
 
@@ -9,6 +9,7 @@ A zero-runtime-dependency CLI that lets an AI agent request human review of a di
 ## Setup
 
 ```bash
+cd skills/change-review/scripts
 npm install      # dev-only: TypeScript + @types/node, used exclusively for type-checking
 npm run check    # tsc --noEmit over reviewer.ts + src/
 npm run demo     # smoke test: opens examples/demo.patch in the browser
@@ -20,10 +21,12 @@ npm run demo     # smoke test: opens examples/demo.patch in the browser
 
 ## Repo layout
 
+The skill is `skills/change-review/` (manifest `SKILL.md` + the CLI package in `scripts/`); `npx skills add` copies that folder verbatim. Paths below are relative to `skills/change-review/scripts/` unless noted.
+
 | path | role |
 |---|---|
-| `reviewer.ts` | the CLI entrypoint agents run (`node <skill-dir>/reviewer.ts`) — arg parsing + all commands (`review`, `wait`, `answer`, `result`, `list`, `serve`, `config`); extracts the global `--dir` before dispatch; spawns the detached server; turns the result into stdout JSON + exit code, embedding its own absolute path and the data dir in every suggested follow-up command |
-| `SKILL.md` | the agent-facing contract (repo root — the repo is the skill); documents invocation, `--dir` discipline, exit codes, and the verdict JSON |
+| `reviewer.ts` | the CLI entrypoint agents run (`node <skill-dir>/scripts/reviewer.ts`) — arg parsing + all commands (`review`, `wait`, `answer`, `result`, `list`, `serve`, `config`); extracts the global `--dir` before dispatch; spawns the detached server; turns the result into stdout JSON + exit code, embedding its own absolute path and the data dir in every suggested follow-up command |
+| `../SKILL.md` | the agent-facing contract (`skills/change-review/SKILL.md`); documents invocation, `--dir` discipline, exit codes, and the verdict JSON |
 | `src/session.ts` | session store under `<--dir>/<id>/` (`setDataDir`/`dataDir`) — request.json, patch.diff, result.json, server.json, threads.json (Discuss threads), history/ per round (each round's patch + result, read back by `readHistoryPatch`/`readHistoryResult` for round browsing), proposal/ + proposal-base/ + apply.json (staged proposed AND base bytes + sha256 manifest, so approve — full or partial — applies deterministically), applied.patch/revert.patch (partial-approve artifacts); outcome polling (verdict or open discussion); reply/answer validation |
 | `src/config.ts` | user config at `~/.change-review/config.json`; one key, `waitMode` (`"stop"` default \| `"poll"`), surfaced as the `config wait-mode` command — the only path the tool touches outside `--dir` |
 | `src/server.ts` | localhost HTTP server — serves the UI (also at `/round/<n>` — one SPA, routed client-side), `GET /api/session[?round=N][&diffAgainst=M]` (parsed diff for that round + `rounds` nav list + threads; a historical round comes back `readOnly: true` with its archived verdict and comments; `diffAgainst` returns the interdiff between rounds M and N instead), `POST /api/submit` (validates — including optional `skipped` chunk refs on approve — attaches each discussed comment's thread as `comments[].discussion`, applies a staged proposal on approve filtered to the kept chunks, writes applied.patch/revert.patch + a `chunks` outcome on partial approves, writes result.json, exits ~500 ms later — a discussion never blocks it), `POST /api/questions`/`/api/answer`/`/api/close-thread` (Discuss threads; `/api/questions` returns the created thread ids so the UI links them to comments) |
@@ -51,7 +54,7 @@ npm run demo     # smoke test: opens examples/demo.patch in the browser
 3. **The server must outlive the CLI.** Agents run commands with timeouts; the review survives because the server is detached and the verdict lives on disk. Never tie a verdict's fate to the spawning process.
 4. **No runtime dependencies, single-file UI, binds 127.0.0.1 only.** The server also rejects requests with a non-local `Host` or `Origin` header (DNS-rebinding/CSRF defense — `rejectNonLocal` in `src/server.ts`); don't weaken it to make a client work, fix the client's headers instead.
 5. **Runs directly under Node's type stripping — keep it that way.** No build step, ever: only erasable TypeScript syntax (no enums, namespaces, or parameter properties — `erasableSyntaxOnly` enforces it), type-only imports marked `import type` (`verbatimModuleSyntax` enforces it), and relative imports spelled with real `.ts` extensions. If `npm run check` passes but `node reviewer.ts` doesn't start, you broke this.
-6. **Root `SKILL.md` is part of the contract.** Changing flags, the JSON shape, or exit codes means updating `SKILL.md` and the README in the same change. Installed copies are clones of this repo, so users pick the change up by pulling — there is no separate install step to re-run.
+6. **`skills/change-review/SKILL.md` is part of the contract.** Changing flags, the JSON shape, or exit codes means updating `SKILL.md` and the README in the same change. Installed copies are copies of the `skills/change-review/` folder; users pick changes up with `npx skills update change-review`.
 7. **Everything lives under `--dir`.** The agent chooses the data dir per review session; the same dir must reach every command (the detached server gets it explicitly on its command line, and every emitted hint echoes it). Never write to a fixed global path — the sole exception is `~/.change-review/config.json`, written only by an explicit `config` command.
 8. **Approve on a proposal session applies exactly the reviewed bytes — filtered to the reviewer's chunk selection — and only the CLI writes them.** The server applies the staged snapshot (verified by sha256; partial targets are rebuilt from the staged base by exact splice) at verdict time; agents are told not to re-write the files. Keep it all-or-nothing on conflicts: a half-applied proposal is worse than a refused one.
 9. **Chunk identity is shared UI ↔ server.** A chunk is (file, 0-based hunk index, 0-based run index) over `parseUnifiedDiff` output, where a run is a contiguous block of +/- lines; `hunkRuns` exists twice — `ui/index.html` and `src/chunks.ts` — and the two MUST derive runs identically. Change them together or selections silently target the wrong chunks.

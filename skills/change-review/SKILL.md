@@ -5,11 +5,11 @@ description: Open an interactive human review of proposed file changes. The user
 
 # Human change review (`reviewer.ts`)
 
-This skill ships its own zero-dependency CLI: `reviewer.ts`, in this skill's folder (the folder containing this SKILL.md). It opens an inline diff in the user's browser; the user comments on specific lines and picks a verdict; the command blocks until then and prints the verdict JSON to stdout.
+This skill ships its own zero-dependency CLI: `scripts/reviewer.ts`, beside this file. It opens an inline diff in the user's browser; the user comments on specific lines and picks a verdict; the command blocks until then and prints the verdict JSON to stdout.
 
 In the commands below:
 
-- **`$REVIEWER`** = the absolute path to `reviewer.ts` in this skill's folder.
+- **`$REVIEWER`** = this skill's base directory + `scripts/reviewer.ts` (an absolute path).
 - **`$DIR`** = the session data directory — a temp directory **you choose**, e.g. `<your scratchpad or $TMPDIR>/change-review`.
 
 Ground rules:

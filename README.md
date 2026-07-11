@@ -19,24 +19,40 @@ Agents write diffs faster than anyone can read them in a terminal. change-review
 
 ## Install
 
-This repo **is** the skill — installing it is copying it into your agent's skills folder:
-
 ```bash
-git clone https://github.com/marinsokol5/change-review ~/.claude/skills/change-review    # Claude Code
-git clone https://github.com/marinsokol5/change-review ~/.codex/skills/change-review     # Codex
+npx skills add marinsokol5/change-review    # Claude Code, Codex, …
+
+npx skills update change-review             # later, to pull updates
 ```
 
-Requires **Node >= 22.18**: the CLI is TypeScript that `node` runs directly, so there is no build step and no `npm install`. Restart your agent session so it picks the skill up; update later with `git pull`.
+Or manually: copy `skills/change-review/` from this repo into `~/.claude/skills/` (or `~/.codex/skills/`).
+
+Requires **Node >= 22.18**: the CLI is TypeScript that `node` runs directly, so there is no build step and no `npm install`. Restart your agent session so it picks the skill up.
 
 Try it without an agent:
 
 ```bash
-node reviewer.ts review examples/demo.patch --title "Demo review"
+cd skills/change-review/scripts && npm run demo
 ```
+
+## Usage
+
+You don't run the CLI — your agent does. You just ask:
+
+| you say                                                 | what opens                                                                          |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| *"Open a review before you apply that."*                | the proposed change, before it touches your files                                   |
+| *"Show me the diff."* / *"Let me review what you did."* | the changes the agent just made to your working tree                                |
+| *"Open a review of the last commit."*                   | any git range, piped in as a patch                                                  |
+| *"Let me annotate src/auth.py."*                        | the file as-is — your comments become the spec, the agent's fixes arrive as round 2 |
+
+The skill also tells agents to open a review on their own before substantive or risky changes. Want every change gated? Add one line to your project's `CLAUDE.md` / `AGENTS.md`: *"Open a change-review before landing any edit."*
+
+In the review: hover a line and click `+` to comment, untick the chunks you don't want, then **Apply**, **Request changes**, or **Discuss**. Take your time — the review outlives the agent's command, and the agent picks your verdict up when you're done.
 
 ## How it works
 
-The agent runs `node <skill-dir>/reviewer.ts review` with `--worktree` (review uncommitted changes), `--proposal <dir>` (review *before* anything is written — on approve the CLI itself writes the reviewed bytes, sha256-verified, all-or-nothing, filtered to your chunk selection), `--file <path>` (annotate existing code), or any unified diff. The command blocks until you decide:
+The agent runs `node <skill-dir>/scripts/reviewer.ts review` with `--worktree` (review uncommitted changes), `--proposal <dir>` (review *before* anything is written — on approve the CLI itself writes the reviewed bytes, sha256-verified, all-or-nothing, filtered to your chunk selection), `--file <path>` (annotate existing code), or any unified diff. The command blocks until you decide:
 
 ```json
 {
@@ -54,7 +70,7 @@ Exit codes mirror the verdict: `0` approve · `2` request_changes · `3` reject 
 
 Sessions live in a temp directory the agent picks (`--dir`); nothing is written to fixed global paths. The UI server runs detached, so when the agent's command times out the review just keeps waiting — by default the agent ends its turn and picks the verdict up when you're done (`config wait-mode poll` makes it wait in a loop instead). Draft comments persist in localStorage, so a closed tab loses nothing.
 
-- **[SKILL.md](SKILL.md)** — the full agent contract (commands, JSON shapes, exit codes)
+- **[SKILL.md](skills/change-review/SKILL.md)** — the full agent contract (commands, JSON shapes, exit codes)
 - **[AGENTS.md](AGENTS.md)** — development guide (architecture, invariants, how to test)
 
 ## License

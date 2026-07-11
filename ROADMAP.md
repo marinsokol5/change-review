@@ -20,7 +20,6 @@ A thin MCP server exposing a `request_review` tool over the existing session/ser
 
 - Unit tests for `src/patch.ts` — the most edge-case-prone code (renames, binary, `\ No newline`, content lines starting with `---`), currently untested.
 - `node reviewer.ts clean [--older-than 7d]` — prune finished/abandoned sessions in a data dir (demo sessions already accumulate).
-- Publish to a skills registry (e.g. `npx skills add`) once the GitHub repo is up.
 - Auto-`git add -N` for untracked files in worktree mode (`--include-untracked`).
 - Proposal mode can't express deletions — support a deletion marker or document worktree mode as the only path.
 
@@ -30,6 +29,7 @@ v0.2 shipped a hook that intercepted the agent's file-edit tools so no edit land
 
 ## Done
 
+- v0.5.1 (2026-07-11): **Restructured for `npx skills add`.** A skill can't sit at the repo top level, so it moved to `skills/change-review/` (manifest) with the CLI package inside it at `scripts/` — same layout as claude-session-summarize. Install is now `npx skills add marinsokol5/change-review` / `npx skills update change-review`.
 - v0.5 (2026-07-11): **Annotation mode.** `review --file <path>` (repeatable) opens existing files as-is — a synthesized all-context diff (`src/annotate.ts`) — so the user can line-comment current code before any change exists. Comments become the spec; the agent's edits arrive as round 2 of the same session with replies threaded as usual. Zero chunks → the Apply button morphs to "Looks good", pure-context hunks render without `@@` headers, and an annotation notice explains the round.
 - v0.4 (2026-07-10): **Skill-only distribution.** The repo is now the skill: root `SKILL.md` + `reviewer.ts` run directly by Node >= 22.18 (native type stripping — no build, no npm install, no `bin/`). Sessions live under an agent-chosen `--dir` (default `<os-tmpdir>/change-review`) instead of `~/.agent-change-reviewer`; every emitted hint embeds the script path and dir, so follow-up commands are copy-paste runnable. Removed: `install claude|codex` (skill copying + settings.json allowlisting of `/tmp/change-review`), the PreToolUse hook and quick menu (→ `hook-version` branch), `review-prefix` config. Config shrank to `wait-mode` at `~/.change-review/config.json`.
 - v0.3 (2026-06-12): **Review conversations.** In-round clarifying **question threads**: comments can be questions, batched to the agent mid-review (exit 5 → the `answer` command, all open questions required, then it keeps waiting), answers thread in place, follow-ups reopen, user can withdraw; verdict locked (UI + `/api/submit` 409) while questions are open. Cross-round **`--replies`**: resubmits require one reply per previous-round comment (fixed or justified-skip, CLI-enforced), merged into the archived result and threaded under the comments in the history panel (auto-opened). New exit code 5; threads in the session's `threads.json`, server is the only writer. Not built on purpose: structured per-hunk reject (a change comment in prose covers it), re-anchoring old threads onto new-round diffs.
