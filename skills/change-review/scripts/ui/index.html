@@ -6,13 +6,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0d1117; --panel: #161b22; --border: #30363d;
     --fg: #e6edf3; --muted: #8d96a0; --accent: #4493f8;
     --add-bg: rgba(46,160,67,.18); --add-num: rgba(46,160,67,.30);
     --del-bg: rgba(248,81,73,.18); --del-num: rgba(248,81,73,.30);
+    --add-intra: rgba(46,160,67,.45); --del-intra: rgba(248,81,73,.45);
+    --add-bg-skip: rgba(46,160,67,.05); --add-num-skip: rgba(46,160,67,.08);
+    --del-bg-skip: rgba(248,81,73,.05); --del-num-skip: rgba(248,81,73,.08);
     --green: #238636; --orange: #9e6a03; --red: #da3633;
-    /* "Lit up" selection idiom: included = bright neutral, skipped = dimmed — no hue borrowed from the diff. */
+    --green-fg: #3fb950; --red-fg: #f85149; --yellow-fg: #d29922;
+    --purple-fg: #a371f7; --purple-border: #8957e5;
+    --accent-tint: rgba(68,147,248,.10); --row-hover: rgba(68,147,248,.08); --kfocus-tint: rgba(68,147,248,.12);
+    --hunk-bg: #121d2f; --btn-bg: #21262d; --banner-bg: #6e2c2c;
+    --overlay-bg: rgba(1,4,9,.6); --modal-shadow: 0 12px 40px rgba(0,0,0,.55);
+    /* "Lit up" selection idiom: included = strongest neutral, skipped = dimmed — no hue borrowed from the diff. */
     --sel: #e6edf3; --sel-dim: #b7bfc7; --sel-bright: #fff;
+    /* Checkbox glyphs draw on the --sel fill, so their stroke is the opposite pole of the theme. */
+    --img-check: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5l3.5 3.5L13 4.5"/%3E%3C/svg%3E');
+    --img-dash: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" d="M3.5 8h9"/%3E%3C/svg%3E');
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #faf9f5; --panel: #f3f1ec; --border: #d5d2c9;
+    --fg: #1f2328; --muted: #59636e; --accent: #0969da;
+    --add-bg: #dafbe1; --add-num: #aceebb;
+    --del-bg: #ffebe9; --del-num: #ffcecb;
+    --add-intra: #82e596; --del-intra: rgba(255,129,130,.6);
+    --add-bg-skip: rgba(31,136,61,.05); --add-num-skip: rgba(31,136,61,.08);
+    --del-bg-skip: rgba(207,34,46,.05); --del-num-skip: rgba(207,34,46,.08);
+    --green: #1f883d; --orange: #9a6700; --red: #cf222e;
+    --green-fg: #1a7f37; --red-fg: #cf222e; --yellow-fg: #9a6700;
+    --purple-fg: #8250df; --purple-border: #8250df;
+    --accent-tint: rgba(9,105,218,.08); --row-hover: rgba(9,105,218,.06); --kfocus-tint: rgba(9,105,218,.10);
+    --hunk-bg: #ddf4ff; --btn-bg: #f6f8fa; --banner-bg: #cf222e;
+    --overlay-bg: rgba(31,35,40,.45); --modal-shadow: 0 12px 40px rgba(140,149,159,.35);
+    --sel: #24292f; --sel-dim: #99a3ad; --sel-bright: #24292f;
+    --img-check: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%23ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5l3.5 3.5L13 4.5"/%3E%3C/svg%3E');
+    --img-dash: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%23ffffff" stroke-width="3" stroke-linecap="round" d="M3.5 8h9"/%3E%3C/svg%3E');
   }
   * { box-sizing: border-box; }
   body {
@@ -24,14 +55,14 @@
 
   #banner {
     display: none; position: sticky; top: 0; z-index: 30;
-    background: #6e2c2c; color: #fff; padding: 8px 20px; font-size: 13px;
+    background: var(--banner-bg); color: #fff; padding: 8px 20px; font-size: 13px;
   }
 
   header { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); position: relative; }
-  header h1 { font-size: 16px; margin: 0 0 4px; padding-right: 40px; }
+  header h1 { font-size: 16px; margin: 0 0 4px; padding-right: 100px; }
   header .meta { color: var(--muted); font-size: 12px; }
-  .stat-add { color: #3fb950; }
-  .stat-del { color: #f85149; }
+  .stat-add { color: var(--green-fg); }
+  .stat-del { color: var(--red-fg); }
 
   /* One line, newest round first; older rounds scroll off to the right. */
   .rounds-nav { margin-top: 10px; display: flex; gap: 6px; align-items: center; overflow-x: auto; padding-bottom: 4px; }
@@ -41,7 +72,7 @@
     border: 1px solid var(--border); color: var(--fg); text-decoration: none; white-space: nowrap;
   }
   a.round-pill:hover { border-color: var(--accent); color: var(--accent); }
-  span.round-pill.viewing { border-color: var(--accent); color: var(--accent); background: rgba(68,147,248,.10); font-weight: 600; }
+  span.round-pill.viewing { border-color: var(--accent); color: var(--accent); background: var(--accent-tint); font-weight: 600; }
   .round-pill .rv { color: var(--muted); }
   span.round-pill.viewing .rv { color: var(--accent); }
   a.round-cmp, span.round-cmp {
@@ -49,10 +80,10 @@
     color: var(--muted); text-decoration: none; border: 1px solid transparent;
   }
   a.round-cmp:hover { color: var(--accent); border-color: var(--accent); }
-  span.round-cmp.active { color: var(--accent); border-color: var(--accent); background: rgba(68,147,248,.10); }
+  span.round-cmp.active { color: var(--accent); border-color: var(--accent); background: var(--accent-tint); }
 
   .file-warning {
-    padding: 6px 12px; font-size: 12px; color: #d29922;
+    padding: 6px 12px; font-size: 12px; color: var(--yellow-fg);
     background: var(--panel); border-bottom: 1px solid var(--border);
   }
 
@@ -69,9 +100,9 @@
     border-radius: 6px 6px 0 0; position: sticky; top: 0; z-index: 10;
   }
   .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid; text-transform: lowercase; }
-  .badge.added { color: #3fb950; border-color: #3fb950; }
-  .badge.deleted { color: #f85149; border-color: #f85149; }
-  .badge.modified { color: #d29922; border-color: #d29922; }
+  .badge.added { color: var(--green-fg); border-color: var(--green-fg); }
+  .badge.deleted { color: var(--red-fg); border-color: var(--red-fg); }
+  .badge.modified { color: var(--yellow-fg); border-color: var(--yellow-fg); }
   .badge.renamed, .badge.binary { color: var(--accent); border-color: var(--accent); }
   .file-header .path { font-size: 13px; word-break: break-all; }
   .file-header .fstat { margin-left: auto; font-size: 12px; white-space: nowrap; }
@@ -83,11 +114,11 @@
   }
   .file-toggle input:checked {
     border-color: var(--sel);
-    background: var(--sel) url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5l3.5 3.5L13 4.5"/%3E%3C/svg%3E') center/10px no-repeat;
+    background: var(--sel) var(--img-check) center/10px no-repeat;
   }
   .file-toggle input:indeterminate {
     border-color: var(--sel);
-    background: var(--sel) url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" d="M3.5 8h9"/%3E%3C/svg%3E') center/10px no-repeat;
+    background: var(--sel) var(--img-dash) center/10px no-repeat;
   }
 
   table.diff { width: 100%; border-collapse: collapse; font-size: 12.5px; line-height: 1.45; }
@@ -102,10 +133,10 @@
   tr.line.add td.num { background: var(--add-num); }
   tr.line.del { background: var(--del-bg); }
   tr.line.del td.num { background: var(--del-num); }
-  tr.line.add .intra { background: rgba(46,160,67,.45); border-radius: 2px; }
-  tr.line.del .intra { background: rgba(248,81,73,.45); border-radius: 2px; }
-  tr.line:hover td { background: rgba(68,147,248,.08); }
-  tr.hunk td { background: #121d2f; color: var(--muted); padding: 4px 12px; font-size: 12px; }
+  tr.line.add .intra { background: var(--add-intra); border-radius: 2px; }
+  tr.line.del .intra { background: var(--del-intra); border-radius: 2px; }
+  tr.line:hover td { background: var(--row-hover); }
+  tr.hunk td { background: var(--hunk-bg); color: var(--muted); padding: 4px 12px; font-size: 12px; }
   /* Chunk-select gutter: checkbox on the run's first line, clickable bracket down the rest. */
   .diff td.sel { width: 22px; min-width: 22px; padding: 0; user-select: none; position: relative; }
   .diff td.sel input {
@@ -115,7 +146,7 @@
   }
   .diff td.sel input:checked {
     border-color: var(--sel);
-    background: var(--sel) url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"%3E%3Cpath fill="none" stroke="%230d1117" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M3 8.5l3.5 3.5L13 4.5"/%3E%3C/svg%3E') center/10px no-repeat;
+    background: var(--sel) var(--img-check) center/10px no-repeat;
   }
   .diff td.sel.run-bar { cursor: pointer; }
   .diff td.sel.run-bar::after {
@@ -125,10 +156,10 @@
   .diff td.sel.run-bar:hover::after { background: var(--sel-bright); box-shadow: 0 0 0 1px var(--sel-bright); }
   tr.line.skipped td.sel.run-bar::after { background: var(--border); }
   tr.line.skipped td.num, tr.line.skipped td.marker, tr.line.skipped .code-inner { opacity: .4; }
-  tr.line.skipped.add { background: rgba(46,160,67,.05); }
-  tr.line.skipped.add td.num { background: rgba(46,160,67,.08); }
-  tr.line.skipped.del { background: rgba(248,81,73,.05); }
-  tr.line.skipped.del td.num { background: rgba(248,81,73,.08); }
+  tr.line.skipped.add { background: var(--add-bg-skip); }
+  tr.line.skipped.add td.num { background: var(--add-num-skip); }
+  tr.line.skipped.del { background: var(--del-bg-skip); }
+  tr.line.skipped.del td.num { background: var(--del-num-skip); }
   .nonl { color: var(--muted); font-size: 11px; font-style: italic; }
 
   button.add-comment {
@@ -146,23 +177,23 @@
   .comment-card .actions { margin-top: 4px; font-size: 12px; }
   .comment-card .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
 
-  .comment-card.discussed { border-color: #8957e5; }
+  .comment-card.discussed { border-color: var(--purple-border); }
   .comment-card .discussion { margin-top: 8px; }
   .comment-card .discussion .msg { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .comment-card .discussion .msg .who { font-weight: 600; margin-right: 6px; }
-  .comment-card .discussion .msg.user .who { color: #a371f7; }
-  .comment-card .discussion .msg.agent .who { color: #3fb950; }
+  .comment-card .discussion .msg.user .who { color: var(--purple-fg); }
+  .comment-card .discussion .msg.agent .who { color: var(--green-fg); }
   .comment-card .discussion .qstatus { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .comment-card .discussion .actions { margin-top: 4px; font-size: 12px; }
   .comment-card .discussion .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
 
-  .qtag { font-size: 11px; font-weight: 600; color: #a371f7; margin-bottom: 2px; }
-  .qthread { border: 1px solid #8957e5; border-radius: 6px; padding: 8px 10px; margin: 6px 0; background: var(--bg); }
+  .qtag { font-size: 11px; font-weight: 600; color: var(--purple-fg); margin-bottom: 2px; }
+  .qthread { border: 1px solid var(--purple-border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; background: var(--bg); }
   .qthread.closed { opacity: .6; border-color: var(--border); }
   .qthread .msg { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .qthread .msg .who { font-weight: 600; margin-right: 6px; }
-  .qthread .msg.user .who { color: #a371f7; }
-  .qthread .msg.agent .who { color: #3fb950; }
+  .qthread .msg.user .who { color: var(--purple-fg); }
+  .qthread .msg.agent .who { color: var(--green-fg); }
   .qthread .qstatus { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .qthread .actions { margin-top: 4px; font-size: 12px; }
   .qthread .actions a { color: var(--accent); cursor: pointer; margin-right: 12px; }
@@ -176,7 +207,7 @@
   .composer .row { margin-top: 6px; display: flex; gap: 8px; }
   button.btn {
     border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px;
-    background: #21262d; color: var(--fg); cursor: pointer; font-size: 13px;
+    background: var(--btn-bg); color: var(--fg); cursor: pointer; font-size: 13px;
   }
   button.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
   button:disabled { opacity: .5; cursor: default; }
@@ -206,24 +237,26 @@
 
   /* Keyboard-focused chunk (j/k): translucent tint layered over the row's own
      add/del background, plus an accent bar in the select gutter. */
-  tr.line.kfocus td { background-image: linear-gradient(rgba(68,147,248,.12), rgba(68,147,248,.12)); }
+  tr.line.kfocus td { background-image: linear-gradient(var(--kfocus-tint), var(--kfocus-tint)); }
   tr.line.kfocus td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
   .kbd-btn {
-    position: absolute; top: 14px; right: 20px; width: 28px; height: 26px; padding: 0;
+    position: absolute; top: 14px; right: 20px; width: 36px; height: 33px; padding: 0;
     background: transparent; border: 1px solid var(--border); border-radius: 6px;
-    color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1;
+    color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
   }
   .kbd-btn:hover { color: var(--fg); border-color: var(--muted); }
+  .theme-btn { right: 64px; }
 
   .overlay {
-    position: fixed; inset: 0; z-index: 100; background: rgba(1,4,9,.6);
+    position: fixed; inset: 0; z-index: 100; background: var(--overlay-bg);
     display: flex; align-items: center; justify-content: center;
   }
   .modal {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 16px 18px; width: min(460px, calc(100vw - 40px));
-    box-shadow: 0 12px 40px rgba(0,0,0,.55);
+    box-shadow: var(--modal-shadow);
   }
   .modal h2 { margin: 0 0 4px; font-size: 15px; }
   .modal .modal-row { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 14px; }
@@ -240,6 +273,19 @@
   #done .big { font-size: 44px; }
   #done p { color: var(--muted); }
 </style>
+<script>
+// Theme boot — must run before first paint so the page never flashes the wrong
+// theme. A cookie overrides the OS preference: unlike localStorage (origin
+// includes the port, and each session's server picks an ephemeral port),
+// cookies are host-scoped, so the choice survives across sessions and ports.
+// The verbose name is deliberate — the cookie is visible to every other app
+// on this host, so it must not collide.
+(() => {
+  const m = document.cookie.match(/(?:^|;\s*)change_review_internals_theme=(light|dark)\b/);
+  document.documentElement.dataset.theme =
+    m ? m[1] : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+})();
+</script>
 </head>
 <body>
 <div id="banner"></div>
@@ -275,6 +321,37 @@ function fileLabel(f) {
   return filePath(f);
 }
 function commentAnchor(c) { return c.file + ANCHOR_SEP + c.side + ANCHOR_SEP + c.line; }
+
+// --- Theme -----------------------------------------------------------------
+// The effective theme lives on <html data-theme>, set before first paint by the
+// boot script in <head>. No cookie = follow the OS; the toggle writes an
+// override cookie, and toggling back to the OS preference clears it so the UI
+// resumes tracking the OS live.
+const THEME_COOKIE = "change_review_internals_theme";
+// Inline SVGs, not text glyphs — characters like ⌨ have tiny ink coverage in
+// their em-box and render at font-dependent sizes, so they can't fill a button.
+const ICON_SUN = '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="3.25"/><path d="M8 1v1.8M8 13.2V15M1 8h1.8M13.2 8H15M3.05 3.05l1.27 1.27M11.68 11.68l1.27 1.27M12.95 3.05l-1.27 1.27M4.32 11.68l-1.27 1.27"/></svg>';
+const ICON_MOON = '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M13.5 9.5A5.75 5.75 0 1 1 6.5 2.5a5 5 0 0 0 7 7Z"/></svg>';
+const ICON_KEYBOARD = '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="1.4" y="3.4" width="13.2" height="9.2" rx="1.6"/><path d="M4 6.2h.9M7.55 6.2h.9M11.1 6.2h.9M4 8.6h.9M7.55 8.6h.9M11.1 8.6h.9M5.2 10.9h5.6"/></svg>';
+const currentTheme = () => (document.documentElement.dataset.theme === "light" ? "light" : "dark");
+const osTheme = () => (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+const themeIcon = () => (currentTheme() === "light" ? ICON_MOON : ICON_SUN);
+const themeTitle = () => "Switch to " + (currentTheme() === "light" ? "dark" : "light") + " theme";
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const b = document.querySelector(".theme-btn");
+  if (b) { b.innerHTML = themeIcon(); b.title = themeTitle(); }
+}
+function toggleTheme() {
+  const next = currentTheme() === "light" ? "dark" : "light";
+  document.cookie = next === osTheme()
+    ? THEME_COOKIE + "=; Max-Age=0; Path=/"
+    : THEME_COOKIE + "=" + next + "; Max-Age=31536000; Path=/; SameSite=Lax";
+  setTheme(next);
+}
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+  if (!new RegExp("(?:^|;\\s*)" + THEME_COOKIE + "=").test(document.cookie)) setTheme(osTheme());
+});
 
 // --- Per-chunk apply selection (sent to /api/submit as `skipped` chunk refs) ---
 
@@ -426,10 +503,15 @@ function renderAll() {
   if (s.add + s.del > 0) {
     metaKids.push(" ", el("span", { class: "stat-add" }, "+" + s.add), " ", el("span", { class: "stat-del" }, "−" + s.del));
   }
+  const kbdBtn = el("button", { class: "kbd-btn", title: "Keyboard shortcuts (?)", onclick: showHelp });
+  kbdBtn.innerHTML = ICON_KEYBOARD;
+  const themeBtn = el("button", { class: "kbd-btn theme-btn", title: themeTitle(), onclick: toggleTheme });
+  themeBtn.innerHTML = themeIcon();
   const headerKids = [
     el("h1", {}, request.title),
     el("div", { class: "meta" }, metaKids),
-    el("button", { class: "kbd-btn", title: "Keyboard shortcuts (?)", onclick: showHelp }, "⌨"),
+    kbdBtn,
+    themeBtn,
   ];
   // The rounds nav only appears once there's more than the current round to look at.
   if (rounds && rounds.length > 1) headerKids.push(renderRoundsNav());

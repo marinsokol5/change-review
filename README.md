@@ -37,7 +37,7 @@ You don't run the CLI — your agent does. You just ask:
 
 The skill also tells agents to open a review on their own before substantive or risky changes. Want every change gated? Add one line to your project's `CLAUDE.md` / `AGENTS.md`: *"Open a change-review before landing any edit."*
 
-In the review: hover a line and click `+` to comment, untick the chunks you don't want, then pick a verdict:
+In the review: hover a line and click `+` to comment, untick the chunks you don't want, then pick a verdict — mouse-free if you prefer (press `?` for the shortcuts: `j`/`k` walk chunks, `x` toggles, `c` comments):
 
 | you press           | what happens                                                                                                                              |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
@@ -78,7 +78,7 @@ flowchart TD
 
 A partial Apply never depends on the model getting an edit right: the verdict ships ready-made `appliedPatch`/`revertPatch` files and the agent just runs `git apply` — and in proposal mode the CLI writes the approved bytes itself. Skipped chunks are removed deterministically, not re-typed.
 
-Sessions live in a temp directory the agent picks (`--dir`); nothing is written to fixed global paths. The UI server runs detached, so when the agent's command times out the review just keeps waiting — by default the agent ends its turn and picks the verdict up when you're done (`config wait-mode poll` makes it wait in a loop instead). Draft comments persist in localStorage, so a closed tab loses nothing.
+Sessions live in a temp directory the agent picks (`--dir`); nothing is written to fixed global paths. The UI server runs detached, so when the agent's command times out the review just keeps waiting — by default the agent ends its turn and picks the verdict up when you're done (`config wait-mode poll` makes it wait in a loop instead). Draft comments persist in localStorage, so a closed tab loses nothing. The UI follows your OS light/dark theme; the header toggle overrides it, and that choice sticks across reviews (a cookie — the one store that survives each session's fresh port).
 
 - **[SKILL.md](skills/change-review/SKILL.md)** — the full agent contract (commands, JSON shapes, exit codes)
 - **[AGENTS.md](AGENTS.md)** — development guide (architecture, invariants, how to test)
