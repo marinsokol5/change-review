@@ -27,8 +27,8 @@
     background: #6e2c2c; color: #fff; padding: 8px 20px; font-size: 13px;
   }
 
-  header { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
-  header h1 { font-size: 16px; margin: 0 0 4px; }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel); position: relative; }
+  header h1 { font-size: 16px; margin: 0 0 4px; padding-right: 40px; }
   header .meta { color: var(--muted); font-size: 12px; }
   .stat-add { color: #3fb950; }
   .stat-del { color: #f85149; }
@@ -204,6 +204,38 @@
   .bulk { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .bulk a { color: var(--accent); cursor: pointer; }
 
+  /* Keyboard-focused chunk (j/k): translucent tint layered over the row's own
+     add/del background, plus an accent bar in the select gutter. */
+  tr.line.kfocus td { background-image: linear-gradient(rgba(68,147,248,.12), rgba(68,147,248,.12)); }
+  tr.line.kfocus td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+  .kbd-btn {
+    position: absolute; top: 14px; right: 20px; width: 28px; height: 26px; padding: 0;
+    background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  .kbd-btn:hover { color: var(--fg); border-color: var(--muted); }
+
+  .overlay {
+    position: fixed; inset: 0; z-index: 100; background: rgba(1,4,9,.6);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; width: min(460px, calc(100vw - 40px));
+    box-shadow: 0 12px 40px rgba(0,0,0,.55);
+  }
+  .modal h2 { margin: 0 0 4px; font-size: 15px; }
+  .modal .modal-row { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 14px; }
+  .modal .esc-hint { color: var(--muted); font-size: 12px; margin-right: auto; }
+  kbd {
+    font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px;
+    padding: 1px 6px; background: var(--bg); white-space: nowrap;
+  }
+  .keys-grid { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin-top: 12px; align-items: baseline; }
+  .keys-grid .k { text-align: right; white-space: nowrap; }
+
   #done { text-align: center; padding: 80px 20px; }
   #done .big { font-size: 44px; }
   #done p { color: var(--muted); }
@@ -215,7 +247,7 @@
 <script>
 "use strict";
 
-const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false, skipped: new Set(), fileCtls: [], replyDrafts: {} };
+const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false, skipped: new Set(), fileCtls: [], replyDrafts: {}, focusKey: null, selDirty: false, modal: false };
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -394,7 +426,11 @@ function renderAll() {
   if (s.add + s.del > 0) {
     metaKids.push(" ", el("span", { class: "stat-add" }, "+" + s.add), " ", el("span", { class: "stat-del" }, "−" + s.del));
   }
-  const headerKids = [el("h1", {}, request.title), el("div", { class: "meta" }, metaKids)];
+  const headerKids = [
+    el("h1", {}, request.title),
+    el("div", { class: "meta" }, metaKids),
+    el("button", { class: "kbd-btn", title: "Keyboard shortcuts (?)", onclick: showHelp }, "⌨"),
+  ];
   // The rounds nav only appears once there's more than the current round to look at.
   if (rounds && rounds.length > 1) headerKids.push(renderRoundsNav());
   app.appendChild(el("header", {}, headerKids));
@@ -1001,12 +1037,12 @@ function renderFooter() {
     ]));
   }
   kids.push(el("button", {
-    class: "verdict discuss", id: "discuss", onclick: discussAll,
+    class: "verdict discuss", id: "discuss", onclick: discussAction,
     title: "Agent replies in the same review revision, no content changes are made.",
   }, "Discuss"));
   kids.push(
     el("button", {
-      class: "verdict request", onclick: () => submit("request_changes"),
+      class: "verdict request", onclick: requestChangesAction,
       title: "Agent submits a new revision, applying changes discussed.",
     }, "Request changes"),
     el("button", { class: "verdict apply", id: "apply", onclick: submitApply }, "Apply"),
@@ -1057,24 +1093,38 @@ function updateFooter() {
 }
 
 async function submitApply() {
+  if (state.sending || state.done) return;
   const { total, selected } = chunkCounts();
-  if (total > 0 && selected === 0) return submit("reject");
-  if (selected < total) {
-    const skipped = total - selected;
-    if (!confirm("Apply " + selected + " of " + total + " chunks? The " + skipped + " skipped " +
-      (skipped === 1 ? "chunk" : "chunks") + " will be discarded.")) return;
+  if (total > 0 && selected === 0) {
+    if (await confirmDialog("No chunks are selected — reject these changes? The agent will discard them.",
+      "Reject all", "reject")) submit("reject");
+    return;
   }
+  let msg, label = "Apply";
+  if (total === 0) {
+    const annotating = state.data.files.length > 0;
+    msg = annotating
+      ? "Looks good — close the review with no changes requested?"
+      : "The diff is empty — close the review as approved?";
+    if (annotating) label = "Looks good";
+  } else if (selected === total) {
+    msg = total === 1
+      ? "Apply the chunk and close the review?"
+      : "Apply all " + total + " chunks and close the review?";
+  } else {
+    const skipped = total - selected;
+    msg = "Apply " + selected + " of " + total + " chunks? The " + skipped + " skipped " +
+      (skipped === 1 ? "chunk" : "chunks") + " will be discarded.";
+  }
+  if (!(await confirmDialog(msg, label, "apply"))) return;
   // Stale draft keys (from an older render of this round) have no ref and are dropped.
   const skippedRefs = [...state.skipped].map((k) => chunkRefByKey.get(k)).filter(Boolean);
   return submit("approve", { total, selected }, skippedRefs);
 }
 
 async function submit(verdict, applyInfo, skippedRefs) {
-  if (verdict === "request_changes" && state.comments.length === 0 && !state.summary.trim()) {
-    if (!confirm("Request changes without any comments or summary?")) return;
-  }
-  if (verdict === "reject" && !confirm("Reject these changes? The agent will discard them.")) return;
-
+  if (state.sending || state.done) return;
+  state.sending = true;
   const buttons = document.querySelectorAll("footer button");
   buttons.forEach((b) => (b.disabled = true));
 
@@ -1098,6 +1148,7 @@ async function submit(verdict, applyInfo, skippedRefs) {
     if (!res.ok) throw new Error(outcome.error || res.statusText);
   } catch (e) {
     alert("Submit failed: " + e.message);
+    state.sending = false;
     buttons.forEach((b) => (b.disabled = false));
     updateFooter();
     return;
@@ -1156,6 +1207,228 @@ function setBanner(show) {
       "When the agent re-runs the review (reviewer.ts wait), reload this page.";
   }
 }
+
+// --- Keyboard shortcuts, chunk focus, confirm dialogs ----------------------
+
+const MOD_KEY = /Mac|iP/.test(navigator.platform) ? "⌘" : "Ctrl";
+
+/** Chunks in DOM order: contiguous tr.line rows sharing a data-run key. */
+function navChunks() {
+  const chunks = [];
+  let cur = null;
+  for (const r of document.querySelectorAll("tr.line[data-run]")) {
+    const key = r.getAttribute("data-run");
+    if (cur && cur.key === key) cur.rows.push(r);
+    else { cur = { key, rows: [r] }; chunks.push(cur); }
+  }
+  return chunks;
+}
+
+/** True when a sits strictly before b in document order. */
+function rowBefore(a, b) {
+  return a !== b && !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+/** The diff line the text selection/caret sits on — clicking a line's text places
+ *  a caret there, which j/k and c use as their anchor. */
+function selectionRow() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  let n = sel.focusNode;
+  if (n && n.nodeType === Node.TEXT_NODE) n = n.parentElement;
+  if (!n || !n.closest) return null;
+  let row = n.closest("tr");
+  if (!row || !row.closest("table.diff")) return null;
+  // A thread/hunk row anchors to the nearest diff line above it.
+  while (row && !(row.classList.contains("line") && row.hasAttribute("data-anchor"))) {
+    row = row.previousElementSibling;
+  }
+  return row;
+}
+
+function clearFocus() {
+  state.focusKey = null;
+  for (const r of document.querySelectorAll("tr.line.kfocus")) r.classList.remove("kfocus");
+}
+
+function setFocus(chunk) {
+  clearFocus();
+  state.focusKey = chunk.key;
+  for (const r of chunk.rows) r.classList.add("kfocus");
+  const rect = chunk.rows[0].getBoundingClientRect();
+  // Only scroll when the chunk is outside the comfortable band (sticky file
+  // header above, fixed footer below) — keeps repeated j/k presses calm.
+  if (rect.top < 60 || rect.bottom > window.innerHeight - 100) {
+    chunk.rows[0].scrollIntoView({ block: "center" });
+  }
+}
+
+/** j/k: next/prev chunk — anchored to a freshly clicked/selected line if there is
+ *  one, else stepping from the focused chunk, else from the top/bottom. */
+function moveFocus(dir) {
+  const chunks = navChunks();
+  if (chunks.length === 0) return;
+  const selRow = state.selDirty ? selectionRow() : null;
+  let idx;
+  if (selRow) {
+    state.selDirty = false;
+    if (dir > 0) {
+      // First chunk that ends at or after the selected line (its container or the next one).
+      idx = chunks.findIndex((c) => !rowBefore(c.rows[c.rows.length - 1], selRow));
+      if (idx < 0) idx = chunks.length - 1;
+    } else {
+      // Last chunk that starts at or before the selected line.
+      idx = chunks.length - 1;
+      while (idx > 0 && rowBefore(selRow, chunks[idx].rows[0])) idx--;
+    }
+  } else {
+    const fi = chunks.findIndex((c) => c.key === state.focusKey);
+    idx = fi < 0
+      ? (dir > 0 ? 0 : chunks.length - 1)
+      : Math.max(0, Math.min(chunks.length - 1, fi + dir));
+  }
+  setFocus(chunks[idx]);
+}
+
+function parseAnchor(a) {
+  const p2 = a.lastIndexOf(ANCHOR_SEP);
+  const p1 = a.lastIndexOf(ANCHOR_SEP, p2 - 1);
+  return { file: a.slice(0, p1), side: a.slice(p1 + 1, p2), line: Number(a.slice(p2 + 1)) };
+}
+
+/** c: comment on the freshly selected line, else the focused chunk's first line. */
+function commentShortcut() {
+  if (state.data.readOnly) return;
+  let row = state.selDirty ? selectionRow() : null;
+  if (!row && state.focusKey) {
+    const chunk = navChunks().find((c) => c.key === state.focusKey);
+    if (chunk) row = chunk.rows[0];
+  }
+  if (!row) return;
+  const anchor = row.getAttribute("data-anchor");
+  const { file, side, line } = parseAnchor(anchor);
+  openComposer(anchor, file, side, line);
+}
+
+async function discussAction() {
+  if (state.sending || state.done || state.data.readOnly) return;
+  const pending = state.comments.filter((c) => c.thread == null).length;
+  if (pending === 0) return;
+  const ok = await confirmDialog(
+    "Send " + pending + (pending === 1 ? " comment" : " comments") + " to the agent to discuss? " +
+      "Sent comments can't be edited afterwards; the agent replies in this same round.",
+    "Discuss", "discuss");
+  if (ok) discussAll();
+}
+
+async function requestChangesAction() {
+  if (state.sending || state.done || state.data.readOnly) return;
+  const n = state.comments.length;
+  const msg = n === 0 && !state.summary.trim()
+    ? "Request changes without any comments or summary?"
+    : "Request changes" + (n > 0 ? " with " + n + (n === 1 ? " comment" : " comments") : "") +
+      "? The agent revises and a new round opens.";
+  if (await confirmDialog(msg, "Request changes", "request")) submit("request_changes");
+}
+
+/** Modal confirm: Enter confirms, Escape (or clicking outside) cancels. */
+function confirmDialog(message, label, cls) {
+  if (state.modal) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      state.modal = false;
+      document.removeEventListener("keydown", onkey, true);
+      overlay.remove();
+      resolve(ok);
+    };
+    const onkey = (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); done(true); }
+      else if (e.key === "Escape") { e.preventDefault(); done(false); }
+    };
+    const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) done(false); } }, [
+      el("div", { class: "modal" }, [
+        el("div", {}, message),
+        el("div", { class: "modal-row" }, [
+          el("span", { class: "esc-hint" }, [el("kbd", {}, "⏎"), " confirm · ", el("kbd", {}, "esc"), " cancel"]),
+          el("button", { class: "btn", onclick: () => done(false) }, "Cancel"),
+          el("button", { class: "verdict " + cls, onclick: () => done(true) }, label),
+        ]),
+      ]),
+    ]);
+    state.modal = true;
+    document.body.appendChild(overlay);
+    document.addEventListener("keydown", onkey, true);
+    overlay.querySelector("button.verdict").focus();
+  });
+}
+
+function showHelp() {
+  if (state.modal) return;
+  const close = () => {
+    state.modal = false;
+    document.removeEventListener("keydown", onkey, true);
+    overlay.remove();
+  };
+  const onkey = (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape" || e.key === "?" || e.key === "Enter") { e.preventDefault(); close(); }
+  };
+  const rows = [
+    ["j / k", "next / previous chunk (starts from the selected line, if any)"],
+    ["x", "include / skip the focused chunk"],
+    ["c", "comment on the selected line or focused chunk"],
+    [MOD_KEY + " ⏎", "save the comment you're writing"],
+    [MOD_KEY + " ⏎", "Apply (outside a comment box)"],
+    ["d", "Discuss — send pending comments to the agent"],
+    ["r", "Request changes"],
+    ["esc", "close dialogs / clear chunk focus"],
+    ["?", "this help"],
+  ];
+  const grid = el("div", { class: "keys-grid" });
+  for (const [keys, desc] of rows) {
+    grid.appendChild(el("span", { class: "k" }, [el("kbd", {}, keys)]));
+    grid.appendChild(el("span", {}, desc));
+  }
+  const overlay = el("div", { class: "overlay", onclick: (e) => { if (e.target === overlay) close(); } }, [
+    el("div", { class: "modal" }, [el("h2", {}, "Keyboard shortcuts"), grid]),
+  ]);
+  state.modal = true;
+  document.body.appendChild(overlay);
+  document.addEventListener("keydown", onkey, true);
+}
+
+function onKey(e) {
+  if (!state.data || state.done || state.modal || e.defaultPrevented || e.isComposing) return;
+  const t = e.target;
+  const typing = t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    // In a composer the textarea's own handler saves the comment; from the
+    // summary field (or anywhere else) the chord submits the review.
+    if (typing && t.tagName === "TEXTAREA") return;
+    if (state.data.readOnly) return;
+    e.preventDefault();
+    submitApply();
+    return;
+  }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  switch (e.key) {
+    case "j": moveFocus(1); break;
+    case "k": moveFocus(-1); break;
+    case "x": if (state.focusKey && chunkable()) toggleChunk(state.focusKey); break;
+    // preventDefault so the keystroke doesn't type "c" into the composer it just focused.
+    case "c": e.preventDefault(); commentShortcut(); break;
+    case "d": discussAction(); break;
+    case "r": requestChangesAction(); break;
+    case "?": showHelp(); break;
+    case "Escape": clearFocus(); break;
+  }
+}
+document.addEventListener("keydown", onKey);
+document.addEventListener("selectionchange", () => { state.selDirty = true; });
 
 init();
 </script>

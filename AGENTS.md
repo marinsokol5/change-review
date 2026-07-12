@@ -36,7 +36,7 @@ The skill is `skills/change-review/` (manifest `SKILL.md` + the CLI package in `
 | `src/proposal.ts` | builds a patch from a proposal dir via `git diff --no-index`, relabelling temp paths to repo-relative ones; also returns the list of changed files so `cmdReview` can stage them for apply |
 | `src/annotate.ts` | annotation mode (`review --file`): synthesizes a zero-change, all-context unified diff so the UI shows current file contents for line comments; the user's comments become the spec and the agent's edits arrive as round 2 |
 | `src/open.ts` | best-effort cross-platform browser open (`CHANGE_REVIEW_NO_OPEN=1` suppresses it) |
-| `ui/index.html` | the entire frontend in one self-contained file — no build step, no CDN, drafts (comments, summary, chunk selection) persisted in localStorage; per-chunk apply toggles live in the diff gutter and drive the morphing Apply button |
+| `ui/index.html` | the entire frontend in one self-contained file — no build step, no CDN, drafts (comments, summary, chunk selection) persisted in localStorage; per-chunk apply toggles live in the diff gutter and drive the morphing Apply button; keyboard shortcuts (`j`/`k` chunk nav anchored to the clicked line, `x` toggle, `c` comment, `d`/`r`/`⌘⏎` send actions, `?` help) with an Enter-to-confirm modal before every terminal action |
 
 ## How a review flows internally
 
