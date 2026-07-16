@@ -27,6 +27,19 @@ Invoked as a slash command, the text after `/change-review` arrives as `ARGUMENT
 - **`commit [<ref-or-range>]`** — the last commit (default `HEAD~1 HEAD`) or the given range (e.g. `main...HEAD`): pipe `git diff` into **patch mode** (example below). This reviews history — there is nothing to apply or revert; on request_changes, make fresh edits in the worktree and resubmit as round 2 of the same session.
 - **one or more file paths** — **annotation mode** on those files.
 - **`resume`** — don't open anything; the user is saying a pending review moved (verdict submitted, or questions asked). Run `node "$REVIEWER" result <session-id> --dir "$DIR"` for the open session.
+- **`help`** — don't open anything and don't run the CLI; show the user this table verbatim (as markdown) and stop:
+
+  | you type | what it opens | use it when |
+  | --- | --- | --- |
+  | `/change-review edit` | the agent's last edit(s) that didn't land, as a proposal — approve and the CLI writes them | you rejected or interrupted a raw file edit and want to see it as a proper diff first |
+  | `/change-review diff` | the uncommitted working-tree changes (`git diff`) | the files are already edited and you want to review before keeping or committing them |
+  | `/change-review commit [<ref-or-range>]` | the last commit, or any range (e.g. `commit main...HEAD`) | reviewing landed history — a quick auto-commit, or a whole branch |
+  | `/change-review <file> …` | the files as-is — no diff, just line comments | annotating existing code: your comments become the spec, the fixes come back as round 2 |
+  | `/change-review resume` | nothing new — picks up the pending review's verdict or questions | you decided (or asked questions) after the agent's turn ended |
+  | `/change-review <free text>` | whatever you describe — the agent picks the mode | anything else, e.g. *"review only the auth changes"* |
+  | `/change-review` | the uncommitted changes if there are any; otherwise the agent asks | the quick default |
+  | `/change-review help` | this table | — |
+
 - **anything else** — free text describing what to review: pick the matching mode. No arguments: with uncommitted changes present, default to `diff`; with a clean tree, ask what to review.
 
 ## Invoking — pick one mode

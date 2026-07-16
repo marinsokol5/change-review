@@ -34,6 +34,7 @@ You don't run the CLI — your agent does. You just ask:
 | *"Review uncommitted changes."* | `/change-review diff`        | your working tree's `git diff`, as the agent left it                                                                         |
 | *"Review the last commit."*          | `/change-review commit`      | that diff as a patch — works for any range (`commit main...HEAD`)                                                            |
 | *"Let me annotate src/auth.py."*     | `/change-review src/auth.py` | the file as-is — your comments become the spec, the agent's fixes arrive as round 2                                          |
+| *"What can I review?"*               | `/change-review help`        | nothing — the agent replies with the full shorthand table and when to use each                                               |
 
 The skill also tells agents to open a review on their own before substantive or risky changes. Want every change gated? Add one line to your project's `CLAUDE.md` / `AGENTS.md`: *"Open a change-review before landing any edit."*
 
