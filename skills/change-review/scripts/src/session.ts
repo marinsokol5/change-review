@@ -152,6 +152,15 @@ export function stageProposal(id: string, root: string, files: Array<{ rel: stri
   fs.writeFileSync(applyManifestPath(id), JSON.stringify({ files: entries }, null, 2));
 }
 
+/** The staged proposed bytes of one file, or null if this session/file has none. */
+export function readStagedFile(id: string, rel: string): Buffer | null {
+  try {
+    return fs.readFileSync(stagedFilePath(id, rel));
+  } catch {
+    return null;
+  }
+}
+
 function readStagedBase(id: string, f: ApplyManifestEntry): Buffer | null {
   if (f.baseSha256 === null) return null;
   let data: Buffer;

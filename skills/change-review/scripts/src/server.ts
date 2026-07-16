@@ -9,10 +9,11 @@ import {
   totalChunks,
   validateChunkRefs,
 } from "./chunks.ts";
+import { contentForFile, newTotal, sliceNewRange } from "./expand.ts";
 import { interdiffFiles } from "./interdiff.ts";
 import { parseUnifiedDiff } from "./patch.ts";
 import * as session from "./session.ts";
-import type { ChunksOutcome, ReviewComment, ReviewResult, Verdict } from "./types.ts";
+import type { ChunksOutcome, FileDiff, ReviewComment, ReviewResult, Verdict } from "./types.ts";
 
 const UI_FILE = fileURLToPath(new URL("../ui/index.html", import.meta.url));
 
@@ -120,6 +121,19 @@ function validateSubmission(body: unknown): Submission | string {
     comments,
     ...(Array.isArray(b.skipped) && { skipped: b.skipped }),
   };
+}
+
+/** Per-file context-expansion availability for the current round: files whose real
+ *  contents were found and verified against the patch, with the new-side line total
+ *  (so the UI knows where EOF is). Files that don't resolve simply get no expanders. */
+function expandInfo(id: string, cwd: string, files: FileDiff[]): Record<string, { total: number }> | undefined {
+  const out: Record<string, { total: number }> = {};
+  for (const f of files) {
+    const c = contentForFile(id, cwd, f);
+    if (!c) continue;
+    out[f.newPath ?? f.oldPath ?? ""] = { total: newTotal(f, c) };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function listenWithFallback(server: http.Server, preferred: number): Promise<number> {
@@ -251,6 +265,10 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           summary = hr.summary;
         }
 
+        const files = parseUnifiedDiff(patch);
+        // Only the live round offers context expansion — historical rounds may
+        // predate the current file contents, so verification would mislead.
+        const expand = readOnly ? undefined : expandInfo(id, r.cwd, files);
         json(res, 200, {
           request: r,
           round: viewRound,
@@ -260,9 +278,39 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           verdict,
           summary,
           comments,
-          files: parseUnifiedDiff(patch),
+          files,
           threads: session.readThreads(id),
+          ...(expand && { expand }),
         });
+      } else if (req.method === "GET" && url.pathname === "/api/expand") {
+        // Context expansion: the texts of new-side lines [from, to] of one diffed
+        // file, served only from contents that verify against the current round's
+        // patch (see contentForFile) — wrong context would be worse than none.
+        const fileParam = url.searchParams.get("file") ?? "";
+        const from = Number(url.searchParams.get("from"));
+        const to = Number(url.searchParams.get("to"));
+        if (!fileParam || !Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from || to - from >= 10_000) {
+          json(res, 400, { error: "expected file, from and to (1-based new-side line numbers, from <= to, at most 10000 lines)" });
+          return;
+        }
+        const cur = session.readRequest(id) ?? request;
+        const files = parseUnifiedDiff(session.readPatch(id) ?? "");
+        const f = files.find((x) => (x.newPath ?? x.oldPath) === fileParam);
+        if (!f) {
+          json(res, 404, { error: `no such file in this round: ${fileParam}` });
+          return;
+        }
+        const content = contentForFile(id, cur.cwd, f);
+        if (!content) {
+          json(res, 409, { error: "the file's contents are unavailable or no longer match the reviewed diff" });
+          return;
+        }
+        const lines = sliceNewRange(f, content, from, to);
+        if (typeof lines === "string") {
+          json(res, 400, { error: lines });
+          return;
+        }
+        json(res, 200, { lines, total: newTotal(f, content) });
       } else if (req.method === "GET" && url.pathname === "/api/threads") {
         json(res, 200, { threads: session.readThreads(id) });
       } else if (req.method === "POST" && url.pathname === "/api/questions") {

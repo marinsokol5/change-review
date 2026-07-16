@@ -38,7 +38,7 @@ You don't run the CLI — your agent does. You just ask:
 
 The skill also tells agents to open a review on their own before substantive or risky changes. Want every change gated? Add one line to your project's `CLAUDE.md` / `AGENTS.md`: *"Open a change-review before landing any edit."*
 
-In the review: hover a line and click `+` to comment, untick the chunks you don't want, then pick a verdict — mouse-free if you prefer (press `?` for the shortcuts: `j`/`k` walk chunks, `x` toggles, `c` comments):
+In the review: hover a line and click `+` to comment, expand the hidden context around a hunk with the `↑`/`↓` arrows in its `@@` bar (GitHub-style, whenever the files are reachable), untick the chunks you don't want, then pick a verdict — mouse-free if you prefer (press `?` for the shortcuts: `j`/`k` walk chunks, `x` toggles, `c` comments):
 
 | you press           | what happens                                                                                                                              |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |

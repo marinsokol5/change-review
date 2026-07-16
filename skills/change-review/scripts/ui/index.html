@@ -137,6 +137,13 @@
   tr.line.del .intra { background: var(--del-intra); border-radius: 2px; }
   tr.line:hover td { background: var(--row-hover); }
   tr.hunk td { background: var(--hunk-bg); color: var(--muted); padding: 4px 12px; font-size: 12px; }
+  /* Context-expansion gutter in the @@ bar (and the bottom tail bar). */
+  tr.hunk td.exp { padding: 1px 4px; text-align: center; white-space: nowrap; user-select: none; }
+  button.expander {
+    border: none; background: transparent; color: var(--accent); cursor: pointer;
+    padding: 0 8px; margin: 0 1px; font-size: 13px; line-height: 1.5; border-radius: 4px;
+  }
+  button.expander:hover { background: var(--accent); color: #fff; }
   /* Chunk-select gutter: checkbox on the run's first line, clickable bracket down the rest. */
   .diff td.sel { width: 22px; min-width: 22px; padding: 0; user-select: none; position: relative; }
   .diff td.sel input {
@@ -293,7 +300,7 @@
 <script>
 "use strict";
 
-const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false, skipped: new Set(), fileCtls: [], replyDrafts: {}, focusKey: null, selDirty: false, modal: false };
+const state = { data: null, comments: [], summary: "", uid: 1, done: false, sending: false, skipped: new Set(), fileCtls: [], replyDrafts: {}, focusKey: null, selDirty: false, modal: false, gapStates: new Map(), gapOverrides: {} };
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -401,11 +408,207 @@ function chunkCounts() {
   return { total: all.length, selected: all.filter((k) => !state.skipped.has(k)).length };
 }
 
+// --- Context expansion (GitHub-style ↑/↓ arrows around hunks) ---------------
+// Each gap (the unshown region above / between / below hunks) keeps one contiguous
+// hidden range [lo, hi] in new-side line numbers. Expanding moves a frontier:
+// "down" reveals lines at the top of the gap (adjacent to the hunk above), "up"
+// at its bottom (adjacent to the hunk below). Texts come from /api/expand, which
+// only serves content verified against this round's patch. Availability is
+// announced per file by /api/session as `expand[path] = { total }`.
+
+// Mirrors of firstNewLine/nextNewLine/… in src/expand.ts — zero-count hunks
+// (-U0 diffs) start, by unified-diff convention, at the line *before* them.
+function firstNewL(h) { return h.newCount === 0 ? h.newStart + 1 : h.newStart; }
+function nextNewL(h) { return firstNewL(h) + h.newCount; }
+function firstOldL(h) { return h.oldCount === 0 ? h.oldStart + 1 : h.oldStart; }
+function nextOldL(h) { return firstOldL(h) + h.oldCount; }
+
+/** Pristine bounds of gap g (0 = above the first hunk … hunks.length = the tail);
+ *  delta maps new-side to old-side line numbers within the gap (old = new + delta). */
+function gapBounds(f, g, total) {
+  const hs = f.hunks;
+  return {
+    start: g === 0 ? 1 : nextNewL(hs[g - 1]),
+    end: g === hs.length ? total : firstNewL(hs[g]) - 1,
+    delta: g === 0 ? firstOldL(hs[0]) - firstNewL(hs[0]) : nextOldL(hs[g - 1]) - nextNewL(hs[g - 1]),
+    kind: g === 0 ? "top" : g === hs.length ? "tail" : "mid",
+  };
+}
+
+/** The file's new-side line total when the server can expand it, else null. */
+function expandableTotal(f) {
+  if (state.data.readOnly || !state.data.expand || f.hunks.length === 0) return null;
+  if (f.status !== "modified" && f.status !== "renamed") return null;
+  const info = state.data.expand[filePath(f)];
+  return info ? info.total : null;
+}
+
+/** The gap's live state (creating it on first use), or null for an empty gap. */
+function gapState(f, fp, g, total) {
+  const key = fp + ANCHOR_SEP + "gap" + ANCHOR_SEP + g;
+  let st = state.gapStates.get(key);
+  if (st) return st;
+  const b = gapBounds(f, g, total);
+  if (b.end < b.start) return null;
+  st = { file: fp, gap: g, kind: b.kind, start: b.start, end: b.end, delta: b.delta,
+         lo: b.start, hi: b.end, topLines: [], bottomLines: [], barRow: null, expTd: null, loading: false };
+  const o = state.gapOverrides[fp + ANCHOR_SEP + g];
+  if (o && o.ok) { st.lo = o.lo; st.hi = o.hi; st.topLines = o.topLines; st.bottomLines = o.bottomLines; }
+  state.gapStates.set(key, st);
+  return st;
+}
+
+async function fetchExpand(file, from, to) {
+  const res = await fetch("/api/expand?file=" + encodeURIComponent(file) + "&from=" + from + "&to=" + to);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data.lines;
+}
+
+/** Re-fetch the line texts of gaps expanded before a reload (the draft stores only
+ *  the ranges), so renderFile can rebuild the revealed rows — and draft comments
+ *  anchored to expanded lines find their rows again. Runs before the first render. */
+async function restoreExpansions() {
+  const jobs = [];
+  for (const [key, o] of Object.entries(state.gapOverrides)) {
+    const p = key.lastIndexOf(ANCHOR_SEP);
+    const file = key.slice(0, p);
+    const g = Number(key.slice(p + 1));
+    const f = state.data.files.find((x) => filePath(x) === file);
+    const total = f ? expandableTotal(f) : null;
+    if (total == null || !Number.isInteger(g) || g < 0 || g > f.hunks.length) continue;
+    const { start, end } = gapBounds(f, g, total);
+    if (!(start <= o.lo && o.lo <= o.hi + 1 && o.hi <= end)) continue;
+    jobs.push((async () => {
+      const [top, bottom] = await Promise.all([
+        o.lo > start ? fetchExpand(file, start, o.lo - 1) : [],
+        o.hi < end ? fetchExpand(file, o.hi + 1, end) : [],
+      ]);
+      if (top.length === o.lo - start && bottom.length === end - o.hi) {
+        o.topLines = top;
+        o.bottomLines = bottom;
+        o.ok = true;
+      }
+    })().catch(() => { /* drift or server hiccup — the gap just starts collapsed */ }));
+  }
+  await Promise.all(jobs);
+}
+
+/** A context line revealed by expansion — commentable like any context line, but
+ *  part of no chunk (it isn't a change), so no apply toggle. */
+function expandedRow(fp, newNo, delta, text) {
+  const anchor = fp + ANCHOR_SEP + "new" + ANCHOR_SEP + newNo;
+  const markerKids = [" "];
+  if (!state.data.readOnly) {
+    markerKids.push(el("button", {
+      class: "add-comment",
+      title: "Comment on this line",
+      onclick: () => openComposer(anchor, fp, "new", newNo),
+    }, "+"));
+  }
+  return el("tr", { class: "line context", "data-anchor": anchor }, [
+    el("td", { class: "sel" }),
+    el("td", { class: "num" }, String(newNo + delta)),
+    el("td", { class: "num" }, String(newNo)),
+    el("td", { class: "marker" }, markerKids),
+    el("td", { class: "code" }, [el("span", { class: "code-inner" }, [text === "" ? " " : text])]),
+  ]);
+}
+
+/** The @@ bar — hosting, when expansion is available, the expander buttons for the
+ *  hidden gap above its hunk in the gutter. A null hunk is the bottom tail bar. */
+function hunkBarRow(h, st) {
+  const text = h
+    ? "@@ -" + h.oldStart + "," + h.oldCount + " +" + h.newStart + "," + h.newCount + " @@ " + (h.section || "")
+    : "";
+  if (!st) return el("tr", { class: "hunk" }, [el("td", { colspan: "5" }, text)]);
+  st.expTd = el("td", { class: "exp", colspan: "3" });
+  st.barRow = el("tr", { class: "hunk" }, [st.expTd, el("td", { colspan: "2" }, text)]);
+  renderExpanderButtons(st);
+  return st.barRow;
+}
+
+function renderExpanderButtons(st) {
+  if (!st.expTd) return;
+  st.expTd.textContent = "";
+  const remaining = st.hi - st.lo + 1;
+  if (st.disabled || remaining <= 0) {
+    // A tail bar exists only to expand; without buttons it's just a stray stripe.
+    if (st.kind === "tail" && st.barRow) st.barRow.remove();
+    return;
+  }
+  const btn = (glyph, dir, title) => el("button", { class: "expander", title, onclick: () => expandGap(st, dir) }, glyph);
+  const hidden = remaining + " hidden line" + (remaining === 1 ? "" : "s");
+  if (remaining <= 20) {
+    const glyph = st.kind === "top" ? "↑" : st.kind === "tail" ? "↓" : "↕";
+    st.expTd.appendChild(btn(glyph, "all", "Show all " + hidden));
+  } else if (st.kind === "top") {
+    st.expTd.appendChild(btn("↑", "up", "Expand up (" + hidden + ")"));
+  } else if (st.kind === "tail") {
+    st.expTd.appendChild(btn("↓", "down", "Expand down (" + hidden + ")"));
+  } else {
+    st.expTd.appendChild(btn("↓", "down", "Expand down (" + hidden + ")"));
+    st.expTd.appendChild(btn("↑", "up", "Expand up (" + hidden + ")"));
+  }
+}
+
+async function expandGap(st, dir) {
+  if (st.loading) return;
+  const remaining = st.hi - st.lo + 1;
+  if (remaining <= 0) return;
+  const all = dir === "all" || remaining <= 20;
+  const from = all || dir === "down" ? st.lo : st.hi - 19;
+  const to = all || dir === "up" ? st.hi : st.lo + 19;
+  st.loading = true;
+  let lines;
+  try {
+    lines = await fetchExpand(st.file, from, to);
+  } catch (e) {
+    disableFileExpanders(st.file);
+    return;
+  } finally {
+    st.loading = false;
+  }
+  // Fewer lines than asked = the file now ends earlier than the session load saw
+  // (it drifted); treat everything past EOF as gone so the buttons don't spin.
+  if (lines.length < to - from + 1) st.hi = Math.min(st.hi, from + lines.length - 1);
+  const rows = lines.map((t, i) => expandedRow(st.file, from + i, st.delta, t));
+  // A tail gap has no bar below it, so everything it reveals is top-frontier
+  // (before-the-bar) — including "show all"; the renderer rebuilds it that way.
+  if (st.kind !== "tail" && (all || dir === "up")) {
+    // Bottom-frontier lines sit right below the bar; a later batch is *earlier*
+    // lines and lands right after the bar again, so the order stays ascending.
+    let after = st.barRow;
+    for (const r of rows) { after.after(r); after = r; }
+    st.hi = Math.min(st.hi, from - 1);
+  } else {
+    for (const r of rows) st.barRow.parentNode.insertBefore(r, st.barRow);
+    st.lo = to + 1;
+  }
+  renderExpanderButtons(st);
+  saveDraft();
+}
+
+/** Expansion stopped working for this file (its contents drifted mid-review) —
+ *  pull the buttons rather than let every click fail. */
+function disableFileExpanders(file) {
+  for (const st of state.gapStates.values()) {
+    if (st.file !== file) continue;
+    st.disabled = true;
+    renderExpanderButtons(st);
+  }
+}
+
 function draftKey() { return "change-review:" + state.data.request.id + ":" + state.data.request.round; }
 function saveDraft() {
   try {
     localStorage.setItem(draftKey(), JSON.stringify({
       comments: state.comments, summary: state.summary, skipped: [...state.skipped],
+      // Expanded-context ranges (no texts — those are re-fetched on load), so a
+      // reload keeps the revealed lines and any draft comments anchored to them.
+      gaps: [...state.gapStates.values()]
+        .filter((s) => s.lo !== s.start || s.hi !== s.end)
+        .map((s) => ({ file: s.file, gap: s.gap, lo: s.lo, hi: s.hi })),
     }));
   } catch (e) { /* private mode etc. */ }
   updateFooter();
@@ -419,6 +622,11 @@ function restoreDraft() {
       state.comments = (d.comments || []).map((c) => ({ ...c, uid: state.uid++ }));
       state.summary = d.summary || "";
       state.skipped = new Set(d.skipped || []);
+      for (const g of d.gaps || []) {
+        if (typeof g.file === "string" && Number.isInteger(g.gap) && Number.isInteger(g.lo) && Number.isInteger(g.hi)) {
+          state.gapOverrides[g.file + ANCHOR_SEP + g.gap] = { lo: g.lo, hi: g.hi };
+        }
+      }
     }
   } catch (e) { /* ignore corrupt drafts */ }
 }
@@ -461,7 +669,11 @@ async function init() {
   state.data = data;
   document.title = "change-review — " + data.request.title;
   // Only the current round is editable, so drafts (and thread polling) apply only there.
-  if (!data.readOnly) restoreDraft();
+  if (!data.readOnly) {
+    restoreDraft();
+    // Before the first render, so draft comments on expanded lines find their rows.
+    await restoreExpansions();
+  }
   renderAll();
   setInterval(() => { healthCheck(); if (!state.data.readOnly) pollThreads(); }, 3000);
 }
@@ -537,6 +749,7 @@ function renderAll() {
     app.appendChild(el("div", { id: "done" }, [el("p", {}, msg)]));
   }
   state.fileCtls = [];
+  state.gapStates.clear();
   for (const f of files) app.appendChild(renderFile(f));
   refreshChunkControls();
 
@@ -733,14 +946,17 @@ function renderFile(f) {
   }
   const tbody = el("tbody", {});
   const fp = filePath(f);
+  const expandTotal = expandableTotal(f);
   f.hunks.forEach((h, hi) => {
     computeIntraHunk(h.lines);
     // A pure-context hunk (annotation mode: the whole file, unchanged) needs no @@ header.
     if (h.lines.some((l) => l.type !== "context")) {
-      tbody.appendChild(el("tr", { class: "hunk" }, [
-        el("td", { colspan: "5" },
-          "@@ -" + h.oldStart + "," + h.oldCount + " +" + h.newStart + "," + h.newCount + " @@ " + (h.section || "")),
-      ]));
+      // The @@ bar hosts the expanders for the hidden gap above this hunk; lines
+      // revealed from the gap's top render above the bar, bottom-revealed below it.
+      const st = expandTotal == null ? null : gapState(f, fp, hi, expandTotal);
+      if (st) for (let n = st.start; n < st.lo; n++) tbody.appendChild(expandedRow(fp, n, st.delta, st.topLines[n - st.start]));
+      tbody.appendChild(hunkBarRow(h, st));
+      if (st) for (let n = st.hi + 1; n <= st.end; n++) tbody.appendChild(expandedRow(fp, n, st.delta, st.bottomLines[n - st.hi - 1]));
     }
     // Map each changed line to its run; the run's first line carries the apply toggle.
     const runOf = new Array(h.lines.length).fill(null);
@@ -799,6 +1015,12 @@ function renderFile(f) {
       ]));
     });
   });
+  // The tail gap (below the last hunk) gets its own bottom bar while lines stay hidden.
+  const tail = expandTotal == null ? null : gapState(f, fp, f.hunks.length, expandTotal);
+  if (tail) {
+    for (let n = tail.start; n < tail.lo; n++) tbody.appendChild(expandedRow(fp, n, tail.delta, tail.topLines[n - tail.start]));
+    if (tail.lo <= tail.hi) tbody.appendChild(hunkBarRow(null, tail));
+  }
   const table = el("table", { class: "diff" }, [tbody]);
   sec.appendChild(table);
   return sec;
