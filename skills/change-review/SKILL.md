@@ -72,6 +72,8 @@ On approve, the CLI itself writes the reviewed files into the repo, byte-for-byt
 git diff --no-color HEAD~1 HEAD | node "$REVIEWER" review - --title "Review: last commit" --dir "$DIR"
 ```
 
+The diff must reach the CLI raw. If the shell environment rewrites commands through an output-filtering proxy (e.g. rtk turning `git diff` into `rtk git diff`, which summarizes the output to save tokens), the pipe delivers a summary instead of a diff and the CLI rejects it — bypass the filter for the diff-producing command (`rtk proxy git diff ...`, or whatever your proxy's raw-passthrough is).
+
 **Annotation mode (comment on existing code — no diff yet).** When the user wants to mark up current files before any change exists ("let me annotate", "I'll comment on the code", planning a change together), open the files as-is:
 
 ```bash
@@ -192,3 +194,4 @@ Every comment needs a reply — what you changed, or why you deliberately didn't
 - `Unknown file extension ".ts"` or a syntax error inside `reviewer.ts` — the user's Node is older than 22.18 (no native type stripping). Ask them to upgrade Node; there is nothing to build or install.
 - `listen EPERM` / socket permission error on start — a command sandbox is blocking the local UI server (it only binds 127.0.0.1). Re-run the command with the sandbox disabled.
 - `unknown session "<id>" in <dir>` — you passed a different `--dir` than the one the review was created with. The pending/discussion JSON's `dir` field has the right one.
+- `the input is not a unified diff` — the piped or file bytes weren't a raw diff. Usual cause: a token-filtering shell proxy (e.g. rtk) intercepted the `git diff` that produced them and summarized its output. Re-run with the filter bypassed (`rtk proxy git diff ...`, or git invoked directly).

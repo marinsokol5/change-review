@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { buildAnnotationPatch } from "./src/annotate.ts";
 import * as config from "./src/config.ts";
 import { openBrowser } from "./src/open.ts";
+import { parseUnifiedDiff } from "./src/patch.ts";
 import { buildProposalPatch } from "./src/proposal.ts";
 import { runServe } from "./src/server.ts";
 import * as session from "./src/session.ts";
@@ -185,6 +186,18 @@ async function cmdReview(args: string[]): Promise<void> {
   }
   if (!patch.trim()) {
     fail("the diff is empty — nothing to review (for --worktree, untracked files need `git add -N` first)");
+  }
+  // Patch-file/stdin bytes come from outside this CLI; reject non-diffs before a session
+  // exists, or the user gets an empty review. The usual culprit is a token-filtering shell
+  // proxy (e.g. rtk) rewriting the `git diff` that produced the pipe into a summary.
+  if (!values.worktree && !values.proposal && !values.file?.length && parseUnifiedDiff(patch).length === 0) {
+    const firstLine = patch.trimStart().split("\n", 1)[0].slice(0, 120);
+    fail(
+      `the input is not a unified diff — no file headers or hunks found (input starts: ${JSON.stringify(firstLine)}).\n` +
+        `If the command that produced it runs through an output-filtering proxy (e.g. \`git diff\` rewritten to ` +
+        `\`rtk git diff\`), the raw diff never reached this tool — bypass the filter for the producing command ` +
+        `(\`rtk proxy git diff ...\`, or run git directly) and retry.`,
+    );
   }
 
   let replies: CommentReply[] | undefined;
