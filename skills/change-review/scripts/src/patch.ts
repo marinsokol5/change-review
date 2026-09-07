@@ -38,15 +38,17 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
 
   // Note: callers must assign the result to `cur` themselves so TypeScript's
   // flow analysis sees the assignment (closures that mutate `cur` don't count).
-  const newFile = (): FileDiff => {
-    const f: FileDiff = { oldPath: null, newPath: null, status: "modified", hunks: [] };
+  const newFile = (at: number): FileDiff => {
+    const f: FileDiff = { oldPath: null, newPath: null, status: "modified", hunks: [], span: [at, at] };
     out.push(f);
     hunk = null;
     oldRemaining = newRemaining = 0;
     return f;
   };
 
-  for (const line of text.split("\n")) {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     // "\ No newline at end of file" — may also follow the hunk's last line, after
     // the announced counts are exhausted, so it's handled before the count gate.
     if (hunk && line.charAt(0) === "\\") {
@@ -78,7 +80,7 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     }
 
     if (line.startsWith("diff --git ") || line.startsWith("diff -")) {
-      cur = newFile();
+      cur = newFile(i);
       // A binary file has no ---/+++ lines, so this header is the only place its
       // path is written; for text diffs those lines follow and overwrite it.
       const paths = line.startsWith("diff --git ")
@@ -120,24 +122,24 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
       continue;
     }
     if (line.startsWith("Binary files ") || line === "GIT binary patch") {
-      if (!cur) cur = newFile();
+      if (!cur) cur = newFile(i);
       cur.status = "binary";
       continue;
     }
     if (line.startsWith("--- ")) {
       // Plain unified diffs have no "diff --git" marker: a "---" after hunks starts a new file.
-      if (!cur || cur.hunks.length > 0) cur = newFile();
+      if (!cur || cur.hunks.length > 0) cur = newFile(i);
       cur.oldPath = stripPathPrefix(line.slice(4));
       continue;
     }
     if (line.startsWith("+++ ")) {
-      if (!cur) cur = newFile();
+      if (!cur) cur = newFile(i);
       cur.newPath = stripPathPrefix(line.slice(4));
       continue;
     }
     const m = HUNK_RE.exec(line);
     if (m) {
-      if (!cur) cur = newFile();
+      if (!cur) cur = newFile(i);
       hunk = {
         oldStart: Number(m[1]),
         oldCount: m[2] ? Number(m[2]) : 1,
@@ -156,6 +158,10 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     // Anything else (index, mode, similarity lines) is metadata we don't need.
   }
 
+  // Each section runs to the start of the next one; the last to the end of the text.
+  for (let i = 0; i < out.length; i++) {
+    out[i].span![1] = i + 1 < out.length ? out[i + 1].span![0] : lines.length;
+  }
   for (const f of out) {
     if (f.status === "modified") {
       if (f.oldPath === null && f.newPath !== null) f.status = "added";
@@ -163,4 +169,39 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     }
   }
   return out.filter((f) => f.hunks.length > 0 || f.status === "binary" || f.status === "renamed");
+}
+
+/**
+ * Does this path fall under one of the pathspec entries? Plain paths, directories
+ * and globs, matched the way git's default pathspec does — `*` crosses `/`, so
+ * `*.png` catches nested files and a directory name catches everything under it.
+ * (No pathspec magic like `:!exclude`: with --worktree git itself does the
+ * matching, and this only has to cover the patch-mode case.)
+ */
+export function matchesPathspec(p: string, specs: string[]): boolean {
+  return specs.some((raw) => {
+    const spec = raw.replace(/^\.\//, "").replace(/\/+$/, "");
+    if (spec === "" || spec === ".") return true;
+    const rx = spec
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
+    return new RegExp("^" + rx + "(?:/.*)?$").test(p);
+  });
+}
+
+/**
+ * The patch with only the files matching `specs` — sliced out of the original text
+ * by line span, never re-serialised, so index lines, binary markers and
+ * `\ No newline` survive byte-for-byte. Empty when nothing matches.
+ */
+export function filterPatchByPaths(patch: string, specs: string[]): string {
+  const lines = patch.split("\n");
+  const kept = parseUnifiedDiff(patch)
+    .filter((f) => [f.newPath, f.oldPath].some((p) => p !== null && matchesPathspec(p, specs)))
+    .map((f) => lines.slice(f.span![0], f.span![1]).join("\n"))
+    .filter((section) => section.trim() !== "");
+  if (kept.length === 0) return "";
+  const out = kept.join("\n");
+  return out.endsWith("\n") ? out : out + "\n";
 }

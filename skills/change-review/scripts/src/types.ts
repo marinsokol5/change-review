@@ -26,6 +26,9 @@ export interface FileDiff {
   hunks: Hunk[];
   /** Set on inter-round comparisons when the rounds disagree about the base contents. */
   warning?: string;
+  /** Line range [start, end) of this file's section in the patch text it came from — lets a
+   *  patch be sliced by file without re-serialising it (`filterPatchByPaths`). */
+  span?: [number, number];
   /** Blob hashes from git's `index <old>..<new>` line, when the diff carries one.
    *  Content-addressed, so they let a binary side (an image) be verified before it's served. */
   oldSha?: string;

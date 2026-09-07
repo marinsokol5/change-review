@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import { buildAnnotationPatch } from "./src/annotate.ts";
 import * as config from "./src/config.ts";
 import { openBrowser } from "./src/open.ts";
-import { parseUnifiedDiff } from "./src/patch.ts";
+import { filterPatchByPaths, parseUnifiedDiff } from "./src/patch.ts";
 import { buildProposalPatch } from "./src/proposal.ts";
 import { runServe } from "./src/server.ts";
 import * as session from "./src/session.ts";
@@ -28,7 +28,11 @@ Every command accepts --dir <path>: the directory sessions live in (default:
 <os-tmpdir>/change-review). Use the same --dir for every command of one review.
 
 Usage:
-  node reviewer.ts review [patch-file]           review a unified diff (file, stdin, or "-")
+  node reviewer.ts review [patch-file] [-- <paths>]
+                                    review a unified diff (file, stdin, or "-")
+    -- <paths>                      limit the review to these files/dirs/globs — a git pathspec
+                                    with --worktree, the same paths matched locally in patch mode.
+                                    With --worktree the -- may be left out.
     --worktree                      review uncommitted changes (git diff <base>)
     --base <ref>                    base for --worktree (default: HEAD)
     --proposal <dir>                review a proposal dir mirroring repo-relative paths;
@@ -133,7 +137,14 @@ function parseTimeout(raw: string): number {
   return t;
 }
 
-async function cmdReview(args: string[]): Promise<void> {
+/** Split a trailing `-- <pathspec>` off the argv, git-style. */
+function extractPathspec(argv: string[]): { args: string[]; paths: string[] } {
+  const i = argv.indexOf("--");
+  return i < 0 ? { args: argv, paths: [] } : { args: argv.slice(0, i), paths: argv.slice(i + 1) };
+}
+
+async function cmdReview(argv: string[]): Promise<void> {
+  const { args, paths } = extractPathspec(argv);
   const { values, positionals } = parseArgs({
     args,
     options: {
@@ -154,12 +165,30 @@ async function cmdReview(args: string[]): Promise<void> {
   if (values.file?.length && (values.worktree || values.proposal || positionals[0])) {
     fail("--file (annotation mode) cannot be combined with --worktree, --proposal, or a patch file");
   }
+  // With --worktree there is no patch file to name, so bare positionals are paths too:
+  // `review --worktree src/a.ts` means the same as `review --worktree -- src/a.ts`.
+  if (values.worktree) paths.push(...positionals);
+  else if (positionals.length > 1) {
+    fail(`unexpected extra argument "${positionals[1]}" — to review only some files of a patch, list them after --`);
+  }
+  // Everything after -- is a path, so a stray option there would silently become one.
+  const flagLike = paths.find((p) => p.startsWith("-") && p !== "-");
+  if (flagLike) {
+    fail(`"${flagLike}" comes after the -- pathspec, where it counts as a path — put every option before the --`);
+  }
+  if (paths.length > 0) {
+    if (values.proposal) {
+      fail("a pathspec can't narrow --proposal — stage only the files you want reviewed (or let the user untick chunks in the UI)");
+    }
+    if (values.file?.length) fail("--file already names the files to annotate — drop the pathspec");
+  }
 
   let patch: string;
   let defaultTitle = `Changes in ${path.basename(process.cwd())}`;
   let proposalFiles: Array<{ rel: string; src: string }> | undefined;
   if (values.worktree) {
-    const r = spawnSync("git", ["diff", "--no-color", values.base], {
+    // git does the pathspec matching, so all of its magic (globs, :!exclude) works.
+    const r = spawnSync("git", ["diff", "--no-color", values.base, ...(paths.length ? ["--", ...paths] : [])], {
       encoding: "utf8",
       maxBuffer: 256 * 1024 * 1024,
     });
@@ -185,7 +214,11 @@ async function cmdReview(args: string[]): Promise<void> {
     fail(`no diff given — pass a patch file, pipe a diff on stdin, or use --worktree / --proposal <dir>\n\n${USAGE}`);
   }
   if (!patch.trim()) {
-    fail("the diff is empty — nothing to review (for --worktree, untracked files need `git add -N` first)");
+    fail(
+      paths.length > 0
+        ? `nothing in the diff matches ${paths.join(", ")} — check the paths (and note that untracked files need \`git add -N\` first)`
+        : "the diff is empty — nothing to review (for --worktree, untracked files need `git add -N` first)",
+    );
   }
   // Patch-file/stdin bytes come from outside this CLI; reject non-diffs before a session
   // exists, or the user gets an empty review. The usual culprit is a token-filtering shell
@@ -198,6 +231,23 @@ async function cmdReview(args: string[]): Promise<void> {
         `\`rtk git diff\`), the raw diff never reached this tool — bypass the filter for the producing command ` +
         `(\`rtk proxy git diff ...\`, or run git directly) and retry.`,
     );
+  }
+
+  // Patch and stdin modes filter locally: the matching files' sections are sliced out
+  // of the original text, so nothing about them is rewritten on the way through.
+  if (paths.length > 0) {
+    if (!values.worktree) {
+      const scoped = filterPatchByPaths(patch, paths);
+      if (!scoped.trim()) {
+        const inPatch = parseUnifiedDiff(patch).map((f) => f.newPath ?? f.oldPath ?? "?");
+        fail(
+          `nothing in the diff matches ${paths.join(", ")} — it touches: ` +
+            `${inPatch.slice(0, 10).join(", ")}${inPatch.length > 10 ? `, … (${inPatch.length} files)` : ""}`,
+        );
+      }
+      patch = scoped;
+    }
+    defaultTitle = paths.length <= 3 ? `Changes in ${paths.join(", ")}` : `Changes in ${paths.length} paths`;
   }
 
   let replies: CommentReply[] | undefined;

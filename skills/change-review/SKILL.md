@@ -23,9 +23,9 @@ Ground rules:
 Invoked as a slash command, the text after `/change-review` arrives as `ARGUMENTS`. Route it before anything else:
 
 - **`edit`** — your most recent file edit(s) that did **not** land (a rejected Edit/Write permission prompt, an interrupted turn). Reconstruct each touched file's complete post-edit contents from your own context and review them in **proposal mode** — on approve the CLI writes them. If those edits actually landed already, treat as `diff`.
-- **`diff`** — the uncommitted working-tree changes: **worktree mode**.
-- **`commit [<ref-or-range>]`** — the last commit (default `HEAD~1 HEAD`) or the given range (e.g. `main...HEAD`): pipe `git diff` into **patch mode** (example below). This reviews history — there is nothing to apply or revert; on request_changes, make fresh edits in the worktree and resubmit as round 2 of the same session.
-- **one or more file paths** — **annotation mode** on those files.
+- **`diff`** — the uncommitted working-tree changes: **worktree mode**. Any paths after it scope the diff (`--worktree -- <paths>`).
+- **`commit [<ref-or-range>]`** — the last commit (default `HEAD~1 HEAD`) or the given range (e.g. `main...HEAD`): pipe `git diff` into **patch mode** (example below); paths after it scope the review (`review - -- <paths>`). This reviews history — there is nothing to apply or revert; on request_changes, make fresh edits in the worktree and resubmit as round 2 of the same session.
+- **one or more file paths** — narrow the review to them. Which mode depends on whether they have changes to show: run `git diff --name-only HEAD -- <paths>`; if it prints anything, the user means *"review these changes"* → **worktree mode scoped to those paths** (`--worktree -- <paths>`). If it prints nothing, there is no diff to show → **annotation mode** on those files. Wording wins over the check: "annotate" / "comment on" / "mark up" means annotation mode even for a changed file, and "what did you change in X" means the scoped diff.
 - **`resume`** — don't open anything; the user is saying a pending review moved (verdict submitted, or questions asked). Run `node "$REVIEWER" result <session-id> --dir "$DIR"` for the open session.
 - **`help`** — don't open anything and don't run the CLI; show the user this table verbatim (as markdown) and stop:
 
@@ -34,7 +34,7 @@ Invoked as a slash command, the text after `/change-review` arrives as `ARGUMENT
   | `/change-review edit` | the agent's last edit(s) that didn't land, as a proposal — approve and the CLI writes them | you rejected or interrupted a raw file edit and want to see it as a proper diff first |
   | `/change-review diff` | the uncommitted working-tree changes (`git diff`) | the files are already edited and you want to review before keeping or committing them |
   | `/change-review commit [<ref-or-range>]` | the last commit, or any range (e.g. `commit main...HEAD`) | reviewing landed history — a quick auto-commit, or a whole branch |
-  | `/change-review <file> …` | the files as-is — no diff, just line comments | annotating existing code: your comments become the spec, the fixes come back as round 2 |
+  | `/change-review <file> …` | just those files: their uncommitted changes if they have any, otherwise the files as-is for line comments | zooming a big diff onto the files you care about — or annotating existing code, where your comments become the spec |
   | `/change-review resume` | nothing new — picks up the pending review's verdict or questions | you decided (or asked questions) after the agent's turn ended |
   | `/change-review <free text>` | whatever you describe — the agent picks the mode | anything else, e.g. *"review only the auth changes"* |
   | `/change-review` | the uncommitted changes if there are any; otherwise the agent asks | the quick default |
@@ -51,6 +51,14 @@ node "$REVIEWER" review --worktree --base HEAD --title "Short description of the
 ```
 
 Untracked new files don't show up in `git diff` — run `git add -N <file>` on them first. If the review is rejected, revert with `git restore` (and delete the new files).
+
+To review only part of a busy working tree, end the command with a pathspec — it goes straight to `git diff`, so directories, globs and exclusions all work:
+
+```bash
+node "$REVIEWER" review --worktree -- src/auth.py src/api/ ':!*.snap' --title "Auth changes" --dir "$DIR"
+```
+
+Every option must come **before** the `--`; everything after it is a path. (With `--worktree` the `--` itself is optional.) Scoping is a lens on the review, not on the work: the files you left out are still changed in the working tree, so say which ones you excluded when you report the verdict — and repeat the same pathspec on later rounds of that session, or the diff silently widens.
 
 **Proposal mode (review BEFORE writing into the repo).** Write each proposed file's *complete new contents* into a fresh staging directory that mirrors repo-relative paths — use a subdirectory of `$DIR`, one per round, so everything about the review lives in one place. The diff is taken against the current working tree automatically:
 
@@ -71,6 +79,8 @@ On approve, the CLI itself writes the reviewed files into the repo, byte-for-byt
 ```bash
 git diff --no-color HEAD~1 HEAD | node "$REVIEWER" review - --title "Review: last commit" --dir "$DIR"
 ```
+
+A pathspec works here too — `review - -- src/auth.py` keeps only those files' sections of the patch, sliced out verbatim (plain paths, directories and `*` globs; git's `:!exclude` magic only works in worktree mode, where git itself does the matching).
 
 The diff must reach the CLI raw. If the shell environment rewrites commands through an output-filtering proxy (e.g. rtk turning `git diff` into `rtk git diff`, which summarizes the output to save tokens), the pipe delivers a summary instead of a diff and the CLI rejects it — bypass the filter for the diff-producing command (`rtk proxy git diff ...`, or whatever your proxy's raw-passthrough is).
 
