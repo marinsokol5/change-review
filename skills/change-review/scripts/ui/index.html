@@ -169,6 +169,77 @@
   tr.line.skipped.del td.num { background: var(--del-num-skip); }
   .nonl { color: var(--muted); font-size: 11px; font-style: italic; }
 
+  /* --- Image diff: a changed picture, shown instead of "binary file" ------- */
+  td.binary-cell { padding: 10px 12px 12px; }
+  tr.line.skipped td.binary-cell { opacity: .45; }
+  .binary-note { color: var(--muted); }
+  .imgdiff { max-width: 900px; }
+  .imgbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 8px; }
+  .imgmodes { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .imgmodes button {
+    border: none; border-right: 1px solid var(--border); background: var(--btn-bg);
+    color: var(--muted); font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer;
+  }
+  .imgmodes button:last-child { border-right: none; }
+  .imgmodes button:hover { color: var(--fg); }
+  .imgmodes button.active { background: var(--accent); color: #fff; }
+  .imgmeta { font-size: 12px; color: var(--muted); }
+  .imgmeta b { color: var(--fg); font-weight: 600; }
+  /* Transparency, the usual way — under both the stacked view and each 2-up shot. */
+  .checker {
+    background-color: var(--panel);
+    background-image:
+      linear-gradient(45deg, var(--border) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--border) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--border) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+  /* Both versions in one box, drawn at a single scale and anchored top-left, so
+     equal pixels line up even when the image was resized. */
+  .imgstage {
+    --pos: 50%; --fade: .5;
+    position: relative; isolation: isolate; max-width: 100%; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  .imgpane { position: absolute; inset: 0; }
+  .imgpane img { position: absolute; left: 0; top: 0; -webkit-user-drag: none; user-select: none; }
+  .imgdiff[data-mode="swipe"] .imgpane.proposed { clip-path: inset(0 0 0 var(--pos)); }
+  .imgdiff[data-mode="fade"] .imgpane.proposed { opacity: var(--fade); }
+  /* Difference: identical pixels cancel to black, so anything that moved lights up. */
+  .imgdiff[data-mode="diff"] .imgpane.proposed { mix-blend-mode: difference; }
+  .imgdiff[data-mode="diff"] .imgstage { background-image: none; background-color: #000; }
+  .imgline {
+    position: absolute; top: 0; bottom: 0; left: var(--pos); width: 2px; margin-left: -1px;
+    background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.45); pointer-events: none;
+  }
+  .imghandle {
+    position: absolute; top: 50%; left: var(--pos); transform: translate(-50%, -50%);
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 50%; pointer-events: none;
+    background: #fff; color: #1f2328; border: 1px solid rgba(0,0,0,.45); box-shadow: 0 1px 6px rgba(0,0,0,.45);
+  }
+  /* The drag surface is a real range input: pointer, touch and arrow keys for free.
+     Its thumb is invisible (the handle above is drawn at --pos instead). */
+  input.imgrange {
+    position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+    appearance: none; -webkit-appearance: none; background: transparent; cursor: ew-resize;
+  }
+  input.imgrange:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  input.imgrange::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+  input.imgrange::-webkit-slider-thumb { -webkit-appearance: none; width: 2px; height: 100%; background: transparent; }
+  input.imgrange::-moz-range-track { height: 100%; background: transparent; }
+  input.imgrange::-moz-range-thumb { width: 2px; height: 100%; border: none; background: transparent; }
+  .img2up { display: flex; flex-wrap: wrap; gap: 12px; }
+  .img2up figure { margin: 0; flex: 1 1 240px; min-width: 0; }
+  .img2up figcaption { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .img2up img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .imgdiff[data-mode="2up"] .imgstage { display: none; }
+  .imgdiff:not([data-mode="2up"]) .img2up { display: none; }
+  .imgdiff:not([data-mode="swipe"]) .imgline, .imgdiff:not([data-mode="swipe"]) .imghandle { display: none; }
+  .imgdiff[data-mode="2up"] input.imgrange, .imgdiff[data-mode="diff"] input.imgrange { display: none; }
+
   button.add-comment {
     position: absolute; left: 1px; top: 0; display: none;
     width: 20px; height: 20px; line-height: 18px; padding: 0;
@@ -904,6 +975,174 @@ function computeIntraHunk(lines) {
   }
 }
 
+// --- Image diff (changed pictures) -----------------------------------------
+// A binary file has no lines to render, but a changed *image* has two versions
+// worth looking at. /api/session announces which ones the server could resolve
+// and verify (`images[path] = { base?, proposed? }`); the bytes come from
+// /api/blob. Both versions are drawn at one scale, anchored top-left, so equal
+// pixels line up even when the picture was resized.
+
+/** Tallest a stacked before/after box gets drawn before it's scaled down. */
+const MAX_IMG_H = 560;
+/** Images have no lines; their comments anchor to the file's first line. */
+const IMAGE_LINE = 1;
+const ICON_SWIPE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M11 5 5 12l6 7z"/><path d="M13 5l6 7-6 7z"/></svg>';
+
+const blobUrl = (fp, side) => "/api/blob?file=" + encodeURIComponent(fp) + "&side=" + side;
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " kB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function imageDiff(f, fp, info) {
+  const sides = [];
+  if (info.base) sides.push({ key: "base", cls: "base", label: "Before", meta: info.base });
+  if (info.proposed) sides.push({ key: "new", cls: "proposed", label: "After", meta: info.proposed });
+  const both = sides.length === 2;
+
+  const wrap = el("div", { class: "imgdiff", "data-mode": both ? "swipe" : "2up" });
+  const stage = el("div", { class: "imgstage checker" });
+  const twoUp = el("div", { class: "img2up" });
+  const metaEl = el("div", { class: "imgmeta" }, "Loading…");
+  const bar = el("div", { class: "imgbar" });
+
+  const imgs = sides.map((s) => el("img", { src: blobUrl(fp, s.key), alt: s.label + " version of " + fp, draggable: "false" }));
+  // Two sides stack in the overlay box; a single side is just shown, so it skips the
+  // stage entirely — and below, the shot it is shown in reuses this same <img>.
+  if (both) sides.forEach((s, i) => stage.appendChild(el("div", { class: "imgpane " + s.cls }, [imgs[i]])));
+  const dimsOf = (i) => (imgs[i].naturalWidth ? imgs[i].naturalWidth + "×" + imgs[i].naturalHeight : "");
+
+  // The side-by-side shots are a second set of <img>s, so they are built only once
+  // that mode is opened — or straight away for a picture that only has one side.
+  const buildTwoUp = () => {
+    if (twoUp.children.length) return;
+    sides.forEach((s, i) => {
+      let shot;
+      if (both) shot = el("img", { src: blobUrl(fp, s.key), alt: s.label + " version of " + fp, class: "checker" });
+      else (shot = imgs[i]).className = "checker";
+      twoUp.appendChild(el("figure", {}, [both ? el("figcaption", {}, s.label) : null, shot]));
+    });
+  };
+
+  if (both) {
+    // The drag surface is a range input: pointer, touch and arrow keys for free.
+    const range = el("input", {
+      type: "range", min: "0", max: "100", value: "50", step: "any", class: "imgrange",
+      "aria-label": "Comparison position", title: "Drag to move the divider",
+      oninput: () => {
+        stage.style.setProperty("--pos", range.value + "%");
+        stage.style.setProperty("--fade", Number(range.value) / 100);
+      },
+    });
+    const handle = el("div", { class: "imghandle" });
+    handle.innerHTML = ICON_SWIPE;
+    stage.append(el("div", { class: "imgline" }), handle, range);
+
+    const group = el("div", { class: "imgmodes" });
+    for (const [mode, label, title] of [
+      ["swipe", "Swipe", "Drag the divider: before on the left, after on the right"],
+      ["2up", "Side by side", "Both versions in full, next to each other"],
+      ["fade", "Fade", "Cross-fade from before to after"],
+      ["diff", "Difference", "Pixel difference — identical pixels are black"],
+    ]) {
+      const btn = el("button", {
+        type: "button", title, class: mode === "swipe" ? "active" : "",
+        onclick: () => {
+          if (mode === "2up") buildTwoUp();
+          wrap.dataset.mode = mode;
+          for (const other of group.children) other.classList.toggle("active", other === btn);
+          range.title = mode === "fade" ? "Drag to cross-fade between the versions" : "Drag to move the divider";
+        },
+      }, label);
+      group.appendChild(btn);
+    }
+    bar.appendChild(group);
+  } else {
+    buildTwoUp();
+  }
+  bar.appendChild(metaEl);
+  wrap.append(bar, stage, twoUp);
+
+  // Sizing waits for the real pixel dimensions: the browser knows them, so the
+  // server doesn't have to parse image headers to tell us.
+  Promise.all(imgs.map((img) => new Promise((resolve) => {
+    if (img.complete) return resolve(img.naturalWidth > 0);
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+  }))).then((oks) => {
+    if (oks.some((ok) => !ok)) {
+      wrap.textContent = "";
+      wrap.appendChild(el("div", { class: "binary-note" },
+        "Binary file changed — the image could not be loaded (it may have changed since the review opened)."));
+      return;
+    }
+    // One scale for both versions (the larger one fills the box), so a resize shows
+    // as a resize instead of two pictures silently normalised to the same size.
+    if (both) {
+      const W = Math.max(...imgs.map((i) => i.naturalWidth));
+      const H = Math.max(...imgs.map((i) => i.naturalHeight));
+      stage.style.width = Math.min(W, Math.round((W * MAX_IMG_H) / H)) + "px";
+      stage.style.aspectRatio = W + " / " + H;
+      for (const img of imgs) {
+        img.style.width = (img.naturalWidth / W) * 100 + "%";
+        img.style.height = (img.naturalHeight / H) * 100 + "%";
+      }
+    }
+    const describe = (i) => el("span", {}, [el("b", {}, dimsOf(i)), " · " + fmtBytes(sides[i].meta.bytes)]);
+    metaEl.textContent = "";
+    if (both) {
+      metaEl.append(describe(0), " → ", describe(1));
+      return;
+    }
+    // One side only: either the file was added or deleted, or the other version no
+    // longer verifies against the diff. Say which — they mean different things.
+    const base = sides[0].key === "base";
+    const expected = base ? !f.newPath : !f.oldPath;
+    metaEl.append(expected ? (base ? "Deleted · " : "Added · ") : (base ? "Before · " : "After · "), describe(0));
+    if (!expected) {
+      metaEl.append(" — the " + (base ? "new" : "previous") + " version couldn't be loaded " +
+        "(it may have changed since the review opened)");
+    }
+  });
+
+  return wrap;
+}
+
+/** A changed binary file is one all-or-nothing chunk with no lines — but it still gets
+ *  a row: comments anchor to rows, and a picture renders inside one. */
+function binaryTable(f, fp) {
+  const info = (state.data.images || {})[fp];
+  const anchor = fp + ANCHOR_SEP + "new" + ANCHOR_SEP + IMAGE_LINE;
+  const markerKids = [];
+  if (!state.data.readOnly) {
+    markerKids.push(el("button", {
+      class: "add-comment",
+      title: info ? "Comment on this image" : "Comment on this file",
+      onclick: () => openComposer(anchor, fp, "new", IMAGE_LINE),
+    }, "+"));
+  }
+  const selTd = el("td", { class: "sel" });
+  const attrs = { class: "line", "data-anchor": anchor };
+  if (chunkable()) {
+    const key = chunkKey(fp, "bin");
+    attrs["data-run"] = key;
+    selTd.appendChild(el("input", {
+      type: "checkbox", class: "run-cb", "data-run-cb": key,
+      onchange: () => toggleChunk(key),
+    }));
+  }
+  const row = el("tr", attrs, [
+    selTd,
+    el("td", { class: "marker" }, markerKids),
+    el("td", { class: "code binary-cell", colspan: "3" }, [
+      info ? imageDiff(f, fp, info) : el("div", { class: "binary-note" }, "Binary file changed (contents not shown)"),
+    ]),
+  ]);
+  return el("table", { class: "diff" }, [el("tbody", {}, [row])]);
+}
+
 function renderFile(f) {
   let add = 0, del = 0;
   for (const h of f.hunks) for (const l of h.lines) {
@@ -915,7 +1154,8 @@ function renderFile(f) {
   const header = el("div", { class: "file-header" }, [
     unchanged ? null : el("span", { class: "badge " + f.status }, f.status),
     el("span", { class: "path" }, fileLabel(f)),
-    unchanged ? null : el("span", { class: "fstat" }, [
+    // A binary or rename-only file has no lines to count; "+0 −0" would just read as a bug.
+    add + del === 0 ? null : el("span", { class: "fstat" }, [
       el("span", { class: "stat-add" }, "+" + add),
       " ",
       el("span", { class: "stat-del" }, "−" + del),
@@ -941,7 +1181,7 @@ function renderFile(f) {
   const sec = el("section", { class: "file" }, [header]);
   if (f.warning) sec.appendChild(el("div", { class: "file-warning" }, "⚠ " + f.warning));
   if (f.status === "binary") {
-    sec.appendChild(el("div", { style: "padding:12px;color:var(--muted)" }, "Binary file changed (contents not shown)"));
+    sec.appendChild(binaryTable(f, filePath(f)));
     return sec;
   }
   const tbody = el("tbody", {});

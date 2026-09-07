@@ -46,6 +46,8 @@ In the review: hover a line and click `+` to comment, expand the hidden context 
 | **Discuss**         | no verdict yet — your comments go to the agent as questions; its replies thread inline, and you can still decide at any time              |
 | **Request changes** | your comments become the spec — the agent fixes every one and resubmits as the next round, a reply threaded under each comment            |
 
+A changed image isn't "binary file changed" here: it opens as a before/after picture with a divider you drag across it, and one click switches to side-by-side, cross-fade, or pixel-difference — comment on it like any line.
+
 Take your time — the review outlives the agent's command, and the agent picks your verdict up when you're done (tell it, or just `/change-review resume`).
 
 ## How it works

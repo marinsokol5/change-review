@@ -10,6 +10,7 @@ import {
   validateChunkRefs,
 } from "./chunks.ts";
 import { contentForFile, newTotal, sliceNewRange } from "./expand.ts";
+import { imageInfo, imageSide } from "./images.ts";
 import { interdiffFiles } from "./interdiff.ts";
 import { parseUnifiedDiff } from "./patch.ts";
 import * as session from "./session.ts";
@@ -266,9 +267,11 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
         }
 
         const files = parseUnifiedDiff(patch);
-        // Only the live round offers context expansion — historical rounds may
-        // predate the current file contents, so verification would mislead.
+        // Only the live round offers context expansion or image previews —
+        // historical rounds may predate the current file contents, so verification
+        // would mislead (and a past round's pixels are usually long overwritten).
         const expand = readOnly ? undefined : expandInfo(id, r.cwd, files);
+        const images = readOnly ? undefined : imageInfo(id, r.cwd, files);
         json(res, 200, {
           request: r,
           round: viewRound,
@@ -281,7 +284,37 @@ export async function runServe(id: string, portArg?: number): Promise<void> {
           files,
           threads: session.readThreads(id),
           ...(expand && { expand }),
+          ...(images && { images }),
         });
+      } else if (req.method === "GET" && url.pathname === "/api/blob") {
+        // The pixels behind an image diff: one side of one changed binary file.
+        // Same rule as /api/expand — only bytes that verify against this round's
+        // patch are served (see images.ts), so the picture shown is the one reviewed.
+        const fileParam = url.searchParams.get("file") ?? "";
+        const side = url.searchParams.get("side");
+        if (!fileParam || (side !== "base" && side !== "new")) {
+          json(res, 400, { error: "expected file and side (base|new)" });
+          return;
+        }
+        const cur = session.readRequest(id) ?? request;
+        const files = parseUnifiedDiff(session.readPatch(id) ?? "");
+        const f = files.find((x) => (x.newPath ?? x.oldPath) === fileParam);
+        if (!f || f.status !== "binary") {
+          json(res, 404, { error: `no such binary file in this round: ${fileParam}` });
+          return;
+        }
+        const img = imageSide(id, cur.cwd, f, side);
+        if (!img) {
+          json(res, 409, { error: "the image's bytes are unavailable or no longer match the reviewed diff" });
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": img.mime,
+          "content-length": img.data.length,
+          // The bytes are only as stable as the working tree they may come from.
+          "cache-control": "no-store",
+        });
+        res.end(img.data);
       } else if (req.method === "GET" && url.pathname === "/api/expand") {
         // Context expansion: the texts of new-side lines [from, to] of one diffed
         // file, served only from contents that verify against the current round's

@@ -26,6 +26,10 @@ export interface FileDiff {
   hunks: Hunk[];
   /** Set on inter-round comparisons when the rounds disagree about the base contents. */
   warning?: string;
+  /** Blob hashes from git's `index <old>..<new>` line, when the diff carries one.
+   *  Content-addressed, so they let a binary side (an image) be verified before it's served. */
+  oldSha?: string;
+  newSha?: string;
 }
 
 export interface ReviewComment {

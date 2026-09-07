@@ -161,6 +161,15 @@ export function readStagedFile(id: string, rel: string): Buffer | null {
   }
 }
 
+/** The staged base (pre-change) bytes of one file, or null if this session/file has none. */
+export function readStagedBaseFile(id: string, rel: string): Buffer | null {
+  try {
+    return fs.readFileSync(stagedBaseFilePath(id, rel));
+  } catch {
+    return null;
+  }
+}
+
 function readStagedBase(id: string, f: ApplyManifestEntry): Buffer | null {
   if (f.baseSha256 === null) return null;
   let data: Buffer;

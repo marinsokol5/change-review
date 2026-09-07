@@ -9,6 +9,24 @@ function stripPathPrefix(raw: string): string | null {
   return p.replace(/^[ab]\//, "");
 }
 
+/**
+ * The two paths in a `diff --git a/<old> b/<new>` header. Unquoted paths may contain
+ * spaces, which makes the split ambiguous, so the common case — both sides naming the
+ * same file — is recognised first by cutting the header in half.
+ */
+function splitGitHeader(rest: string): [string, string] | null {
+  const mid = (rest.length - 1) / 2;
+  if (Number.isInteger(mid) && rest[mid] === " ") {
+    const a = rest.slice(0, mid);
+    const b = rest.slice(mid + 1);
+    const p = stripPathPrefix(a);
+    if (p !== null && p === stripPathPrefix(b)) return [a, b];
+  }
+  const quoted = rest.lastIndexOf(' "b/');
+  const i = quoted >= 0 ? quoted : rest.lastIndexOf(" b/");
+  return i < 0 ? null : [rest.slice(0, i), rest.slice(i + 1)];
+}
+
 export function parseUnifiedDiff(text: string): FileDiff[] {
   const out: FileDiff[] = [];
   let cur: FileDiff | null = null;
@@ -61,14 +79,25 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
 
     if (line.startsWith("diff --git ") || line.startsWith("diff -")) {
       cur = newFile();
+      // A binary file has no ---/+++ lines, so this header is the only place its
+      // path is written; for text diffs those lines follow and overwrite it.
+      const paths = line.startsWith("diff --git ")
+        ? splitGitHeader(line.slice("diff --git ".length))
+        : null;
+      if (paths) {
+        cur.oldPath = stripPathPrefix(paths[0]);
+        cur.newPath = stripPathPrefix(paths[1]);
+      }
       continue;
     }
     if (cur && line.startsWith("new file mode")) {
       cur.status = "added";
+      cur.oldPath = null; // the header named both sides; this one doesn't exist
       continue;
     }
     if (cur && line.startsWith("deleted file mode")) {
       cur.status = "deleted";
+      cur.newPath = null;
       continue;
     }
     if (cur && line.startsWith("rename from ")) {
@@ -78,6 +107,16 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     }
     if (cur && line.startsWith("rename to ")) {
       cur.newPath = line.slice("rename to ".length);
+      continue;
+    }
+    if (cur && line.startsWith("index ")) {
+      // git's blob hashes for the two sides. Text diffs don't need them, but for a
+      // binary file they're the only handle on its contents (see images.ts).
+      const im = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(line);
+      if (im) {
+        cur.oldSha = im[1];
+        cur.newSha = im[2];
+      }
       continue;
     }
     if (line.startsWith("Binary files ") || line === "GIT binary patch") {

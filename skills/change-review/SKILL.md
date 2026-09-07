@@ -120,6 +120,7 @@ Result shape:
 ```
 
 - `side: "new"` line numbers refer to the proposed version; `side: "old"` refers to removed lines in the original.
+- A comment on a **binary file** (a changed image is shown as a before/after picture) has no real line: it arrives as `side: "new", line: 1` and is about the file as a whole.
 - `summary` may contain instructions even when there are no line comments.
 - An approve can still carry comments — they are advisory; the reviewed content was applied as-is. To act on them, make fresh edits and open a new review.
 - A comment the user discussed with you carries a `discussion` array alongside it (their comment, your reply, any follow-ups).
