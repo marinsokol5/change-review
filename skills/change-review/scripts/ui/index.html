@@ -1238,7 +1238,9 @@ function renderFile(f) {
   ]);
   if (chunkable()) {
     const keys = fileChunkKeys(f);
-    if (keys.length > 0) {
+    // One chunk in the file means this roll-up would just duplicate that chunk's
+    // own gutter checkbox (a changed image is the usual case) — skip it.
+    if (keys.length > 1) {
       const cb = el("input", {
         type: "checkbox",
         onchange: () => {
@@ -1371,7 +1373,7 @@ function refreshChunkControls() {
     const sel = ctl.keys.filter((k) => !state.skipped.has(k)).length;
     ctl.cb.checked = sel === total && total > 0;
     ctl.cb.indeterminate = sel > 0 && sel < total;
-    ctl.count.textContent = total > 1 ? sel + "/" + total : "";
+    ctl.count.textContent = sel + "/" + total;
   }
 }
 
