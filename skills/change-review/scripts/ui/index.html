@@ -175,14 +175,6 @@
   .binary-note { color: var(--muted); }
   .imgdiff { max-width: 900px; }
   .imgbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 8px; }
-  .imgmodes { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .imgmodes button {
-    border: none; border-right: 1px solid var(--border); background: var(--btn-bg);
-    color: var(--muted); font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer;
-  }
-  .imgmodes button:last-child { border-right: none; }
-  .imgmodes button:hover { color: var(--fg); }
-  .imgmodes button.active { background: var(--accent); color: #fff; }
   .imgmeta { font-size: 12px; color: var(--muted); }
   .imgmeta b { color: var(--fg); font-weight: 600; }
   /* Transparency, the usual way — under both the stacked view and each 2-up shot. */
@@ -324,8 +316,25 @@
     color: var(--muted); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
   }
-  .kbd-btn:hover { color: var(--fg); border-color: var(--muted); }
+  .kbd-btn:hover, .kbd-btn[aria-expanded="true"] { color: var(--fg); border-color: var(--muted); }
   .theme-btn { right: 64px; }
+  /* Only there when the round has a picture to compare, so only then does the
+     title leave room for a third button. */
+  .imgmode-btn { right: 108px; }
+  header.has-imgmode h1 { padding-right: 148px; }
+  .hdr-menu {
+    position: absolute; top: 52px; right: 108px; z-index: 50; padding: 4px;
+    min-width: 200px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: var(--modal-shadow);
+  }
+  .hdr-menu .menu-title { font-size: 11px; color: var(--muted); padding: 4px 8px 6px; }
+  .hdr-menu button {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    border: none; border-radius: 5px; background: transparent; color: var(--fg);
+    font: inherit; font-size: 13px; padding: 6px 8px; cursor: pointer;
+  }
+  .hdr-menu button:hover { background: var(--btn-bg); }
+  .hdr-menu button .tick { width: 12px; color: var(--accent); }
 
   .overlay {
     position: fixed; inset: 0; z-index: 100; background: var(--overlay-bg);
@@ -430,6 +439,79 @@ function toggleTheme() {
 matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
   if (!new RegExp("(?:^|;\\s*)" + THEME_COOKIE + "=").test(document.cookie)) setTheme(osTheme());
 });
+
+// --- Image compare mode ----------------------------------------------------
+// How a changed picture is shown — swipe / side by side / fade / difference —
+// is one setting for the whole review, not a per-image toggle: switching modes
+// is how you read a set of pictures, and re-picking it on each one is busywork.
+// So it sits in the header next to the theme, and persists in a host-scoped
+// cookie for the same reason the theme does — each session's server picks a
+// fresh ephemeral port, so localStorage would forget it.
+const IMG_MODE_COOKIE = "change_review_internals_image_mode";
+const IMG_MODES = [
+  ["swipe", "Swipe", "Drag the divider: before on the left, after on the right"],
+  ["2up", "Side by side", "Both versions in full, next to each other"],
+  ["fade", "Fade", "Cross-fade from before to after"],
+  ["diff", "Difference", "Pixel difference — identical pixels are black"],
+];
+const ICON_IMG_MODE = '<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="1.5" y="3" width="13" height="10" rx="1.6"/><path d="M8 1.9v12.2"/><path d="M8 3h5a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 13 13H8z" fill="currentColor" stroke="none" opacity=".3"/></svg>';
+let imgMode = (document.cookie.match(new RegExp("(?:^|;\\s*)" + IMG_MODE_COOKIE + "=([a-z0-9]+)")) || [])[1];
+if (!IMG_MODES.some(([m]) => m === imgMode)) imgMode = "swipe";
+const imgModeLabel = () => (IMG_MODES.find(([m]) => m === imgMode) || IMG_MODES[0])[1];
+const imgModeTitle = () => "Image compare: " + imgModeLabel();
+
+function setImgMode(mode) {
+  imgMode = mode;
+  document.cookie = IMG_MODE_COOKIE + "=" + mode + "; Max-Age=31536000; Path=/; SameSite=Lax";
+  // Every picture on the page follows: each one applies the mode itself (a
+  // one-sided picture has nothing to compare, so it has no hook and ignores it).
+  for (const wrap of document.querySelectorAll(".imgdiff")) {
+    if (wrap.applyImgMode) wrap.applyImgMode();
+  }
+  const btn = document.querySelector(".imgmode-btn");
+  if (btn) btn.title = imgModeTitle();
+}
+
+// A menu rather than a cycling button: four modes, each one click away, and the
+// active one visible without clicking anything.
+let hdrMenu = null;
+function closeHdrMenu() {
+  if (!hdrMenu) return;
+  hdrMenu.menu.remove();
+  hdrMenu.btn.setAttribute("aria-expanded", "false");
+  document.removeEventListener("mousedown", onHdrMenuOutside, true);
+  document.removeEventListener("keydown", onHdrMenuKey, true);
+  hdrMenu = null;
+}
+function onHdrMenuOutside(e) {
+  if (!hdrMenu.menu.contains(e.target) && !hdrMenu.btn.contains(e.target)) closeHdrMenu();
+}
+function onHdrMenuKey(e) {
+  if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); closeHdrMenu(); }
+}
+function openHdrMenu(btn) {
+  const menu = el("div", { class: "hdr-menu", role: "menu" }, [el("div", { class: "menu-title" }, "Image compare")]);
+  for (const [mode, label, title] of IMG_MODES) {
+    menu.appendChild(el("button", {
+      type: "button", role: "menuitemradio", "aria-checked": String(mode === imgMode), title,
+      onclick: () => { setImgMode(mode); closeHdrMenu(); },
+    }, [el("span", { class: "tick" }, mode === imgMode ? "✓" : ""), label]));
+  }
+  btn.setAttribute("aria-expanded", "true");
+  btn.parentNode.appendChild(menu);
+  hdrMenu = { btn, menu };
+  document.addEventListener("mousedown", onHdrMenuOutside, true);
+  document.addEventListener("keydown", onHdrMenuKey, true);
+}
+function imgModeButton() {
+  const btn = el("button", {
+    class: "kbd-btn imgmode-btn", title: imgModeTitle(),
+    "aria-haspopup": "true", "aria-expanded": "false",
+    onclick: () => { const wasOpen = hdrMenu; closeHdrMenu(); if (!wasOpen) openHdrMenu(btn); },
+  });
+  btn.innerHTML = ICON_IMG_MODE;
+  return btn;
+}
 
 // --- Per-chunk apply selection (sent to /api/submit as `skipped` chunk refs) ---
 
@@ -776,6 +858,7 @@ function renderAll() {
   const { request, files, round, readOnly, rounds, diffAgainst } = state.data;
   const s = stats(files);
   const app = $app();
+  closeHdrMenu(); // its button is about to be thrown away
   app.textContent = "";
 
   const roundLabel = diffAgainst != null ? "round " + diffAgainst + " → round " + round : "round " + round;
@@ -796,9 +879,12 @@ function renderAll() {
     kbdBtn,
     themeBtn,
   ];
+  // The compare-mode picker only means anything with a picture that has two sides.
+  const comparable = Object.values(state.data.images || {}).some((i) => i.base && i.proposed);
+  if (comparable) headerKids.push(imgModeButton());
   // The rounds nav only appears once there's more than the current round to look at.
   if (rounds && rounds.length > 1) headerKids.push(renderRoundsNav());
-  app.appendChild(el("header", {}, headerKids));
+  app.appendChild(el("header", comparable ? { class: "has-imgmode" } : {}, headerKids));
 
   if (readOnly) app.appendChild(renderReadOnlyNotice());
   // Annotation mode: a live round whose "diff" is all context — existing code opened
@@ -1002,7 +1088,7 @@ function imageDiff(f, fp, info) {
   if (info.proposed) sides.push({ key: "new", cls: "proposed", label: "After", meta: info.proposed });
   const both = sides.length === 2;
 
-  const wrap = el("div", { class: "imgdiff", "data-mode": both ? "swipe" : "2up" });
+  const wrap = el("div", { class: "imgdiff", "data-mode": both ? imgMode : "2up" });
   const stage = el("div", { class: "imgstage checker" });
   const twoUp = el("div", { class: "img2up" });
   const metaEl = el("div", { class: "imgmeta" }, "Loading…");
@@ -1040,25 +1126,14 @@ function imageDiff(f, fp, info) {
     handle.innerHTML = ICON_SWIPE;
     stage.append(el("div", { class: "imgline" }), handle, range);
 
-    const group = el("div", { class: "imgmodes" });
-    for (const [mode, label, title] of [
-      ["swipe", "Swipe", "Drag the divider: before on the left, after on the right"],
-      ["2up", "Side by side", "Both versions in full, next to each other"],
-      ["fade", "Fade", "Cross-fade from before to after"],
-      ["diff", "Difference", "Pixel difference — identical pixels are black"],
-    ]) {
-      const btn = el("button", {
-        type: "button", title, class: mode === "swipe" ? "active" : "",
-        onclick: () => {
-          if (mode === "2up") buildTwoUp();
-          wrap.dataset.mode = mode;
-          for (const other of group.children) other.classList.toggle("active", other === btn);
-          range.title = mode === "fade" ? "Drag to cross-fade between the versions" : "Drag to move the divider";
-        },
-      }, label);
-      group.appendChild(btn);
-    }
-    bar.appendChild(group);
+    // The mode is global (the header picks it); this is how one picture adopts
+    // it — and it runs once now to settle the initial mode's side effects.
+    wrap.applyImgMode = () => {
+      if (imgMode === "2up") buildTwoUp();
+      wrap.dataset.mode = imgMode;
+      range.title = imgMode === "fade" ? "Drag to cross-fade between the versions" : "Drag to move the divider";
+    };
+    wrap.applyImgMode();
   } else {
     buildTwoUp();
   }
